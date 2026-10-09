@@ -2,6 +2,8 @@
 
 **Status:** Draft v1 for review · **Date:** 9 October 2026 · **Scope:** plan only, no code changes yet
 
+> **Update:** the client chose Plan 2 (Track B) with a 30-day deadline. The reduced, essential scope and the week-by-week schedule are in [`PLAN_30_DAYS.md`](PLAN_30_DAYS.md). This document remains the full long-term plan.
+
 Prepared from the source in `sms-master (1).zip` and `KANNEL SMS GATEWAY issues.docx`. Some production pieces are not in the zip (listed in §2.1), so parts of the current-flow description are reconstructed from the code and the issues document and must be confirmed against the live server in Phase 0.
 
 ---
