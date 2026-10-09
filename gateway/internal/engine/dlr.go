@@ -181,6 +181,7 @@ type dlrMessage struct {
 	accountID  int64
 	kind       string
 	webhook    string
+	dlrFormat  string
 	source     string
 	dest       string
 	body       string
@@ -197,10 +198,10 @@ func (e *Engine) loadDLRMessage(ctx context.Context, id uuid.UUID, createdAt tim
 	var parts int16
 	var dlrAt *time.Time
 	err := e.db.QueryRow(ctx, `SELECT m.id, m.created_at, COALESCE(m.account_id, 0), COALESCE(a.kind, ''), c.dlr_webhook_url,
-			m.source, m.destination, m.body, m.status, m.dlr_status, m.dlr_error, m.client_ref, m.parts, m.dlr_at
+			c.dlr_format, m.source, m.destination, m.body, m.status, m.dlr_status, m.dlr_error, m.client_ref, m.parts, m.dlr_at
 		FROM messages m JOIN clients c ON c.id = m.client_id LEFT JOIN accounts a ON a.id = m.account_id
 		WHERE m.id = $1 AND m.created_at = $2`, id, createdAt).
-		Scan(&m.id, &m.createdAt, &m.accountID, &m.kind, &m.webhook, &m.source, &m.dest, &m.body, &m.status,
+		Scan(&m.id, &m.createdAt, &m.accountID, &m.kind, &m.webhook, &m.dlrFormat, &m.source, &m.dest, &m.body, &m.status,
 			&m.dlrStatus, &m.dlrError, &m.clientRef, &parts, &dlrAt)
 	m.parts = int(parts)
 	if dlrAt != nil {
@@ -256,10 +257,23 @@ func (e *Engine) deliverDLR(ctx context.Context, m dlrMessage) error {
 		if m.webhook == "" {
 			return nil // HTTP client without a webhook: status is available through the API
 		}
-		body, _ := json.Marshal(map[string]any{
+		payload := map[string]any{
 			"id": m.id.String(), "client_ref": m.clientRef, "to": m.dest, "from": m.source, "status": m.status,
 			"dlr_status": stat, "error": m.dlrError, "parts": m.parts, "done_at": m.dlrAt.UTC().Format(time.RFC3339),
-		})
+		}
+		if m.dlrFormat == "legacy" {
+			// The old DLR pusher's payload: status is the Kannel DLR mask (1 delivered, 2 failed, 16 rejected).
+			mask := 2
+			switch stat {
+			case "DELIVRD":
+				mask = 1
+			case "REJECTD":
+				mask = 16
+			}
+			payload = map[string]any{"from": m.source, "id": m.id.String(), "to": m.dest, "status": fmt.Sprint(mask),
+				"merchant_reference": m.clientRef, "date": m.createdAt.Format("2006-01-02 15:04:05")}
+		}
+		body, _ := json.Marshal(payload)
 		rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		req, err := http.NewRequestWithContext(rctx, http.MethodPost, m.webhook, bytes.NewReader(body))
