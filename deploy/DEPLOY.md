@@ -152,3 +152,18 @@ Messages already accepted by the new gateway stay in its database (searchable, b
 - **Config changes** (routes, rates, vendors, accounts) apply immediately; no restart is ever needed.
 - **Upgrades**: replace the binary and `web` folder, then `systemctl restart telivoz-gateway`. Migrations run
   automatically at start.
+
+## 9. After go-live: recommended settings
+
+- **Two-factor sign-in**: every admin, manager and finance user turns it on under *Settings → Two-factor sign-in*.
+  If a phone is lost, an admin uses *Users → Reset 2FA*. This also signs the user out everywhere.
+- **Blacklist**: import any existing do-not-contact lists under *Blacklist → Import list*, as one number per line or CSV.
+  Clients can manage their own list, and staff can add global entries.
+- **Incoming SMS**: create *Incoming routes* (number prefix and/or keyword → client) and set each client's MO webhook,
+  or let the client bind SMPP as receiver/transceiver. STOP-type replies add the sender to that client's blacklist.
+- **DLR failover**: on each vendor connection, list the DLR results that should try the next vendor, for example
+  `UNDELIV:011` or `REJECTD`. Only list codes that mean "this route cannot deliver", never generic failures.
+- **Statements**: *Statements* shows each client's monthly usage, payments and balances. Use *Print / PDF* to send it.
+- **Mobile app**: staff and clients sign in with the portal address and their usual login. See `apps/mobile/README.md` for store builds.
+- **Docker image**: the final image downloads nothing at build time (it uses the Alpine CA bundle and embedded
+  time zones), and runs as a non-root user. Set `TZ` if logs should use local time.

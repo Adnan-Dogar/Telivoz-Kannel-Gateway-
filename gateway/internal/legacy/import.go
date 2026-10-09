@@ -849,15 +849,15 @@ func (im *importer) importMessageTable(ctx context.Context, table string) (int, 
 			return count, err
 		}
 		var (
-			ids                                         []uuid.UUID
-			created                                     []time.Time
-			clientIDs, accountIDs, networkIDs, connIDs  []*int64
-			legacyIDs                                   []int64
-			sources, dests, bodies, statuses, dlrStats  []string
-			countries                                   []*string
-			codings, parts                              []int16
-			prices, costs, refs                         []string
-			sentAt, dlrAt                               []*time.Time
+			ids                                        []uuid.UUID
+			created                                    []time.Time
+			clientIDs, accountIDs, networkIDs, connIDs []*int64
+			legacyIDs                                  []int64
+			sources, dests, bodies, statuses, dlrStats []string
+			countries                                  []*string
+			codings, parts                             []int16
+			prices, costs, refs                        []string
+			sentAt, dlrAt                              []*time.Time
 		)
 		n := 0
 		for rows.Next() {

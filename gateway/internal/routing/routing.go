@@ -111,9 +111,9 @@ type ContentRule struct {
 
 // rateKey identifies a price: owner (client or connection), country and network (0 = whole country).
 type rateKey struct {
-	owner      int64
-	country    string
-	networkID  int64
+	owner     int64
+	country   string
+	networkID int64
 }
 
 // Snapshot holds everything needed to route and price a message.
@@ -128,6 +128,20 @@ type Snapshot struct {
 	connections  map[int64]Connection
 	routes       []*Route
 	rules        []*ContentRule
+	blacklist    map[int64]map[string]struct{} // client id (0 = everyone) -> numbers
+	moRoutes     []*MORoute
+}
+
+// MORoute sends incoming messages for a number (and optional keyword) to a client.
+type MORoute struct {
+	ID           int64
+	Name         string
+	Priority     int
+	NumberPrefix string
+	Keyword      string // upper-case
+	ClientID     int64
+	AccountID    int64
+	AutoOptOut   bool
 }
 
 // Builder collects configuration and produces a Snapshot.
@@ -137,6 +151,7 @@ func NewBuilder() *Builder {
 	return &Builder{s: &Snapshot{
 		prefixes: map[string]int64{}, networks: map[int64]Network{}, dialCodes: map[string]string{},
 		clientRates: map[rateKey]Micros{}, vendorRates: map[rateKey]Micros{}, connections: map[int64]Connection{},
+		blacklist: map[int64]map[string]struct{}{},
 	}}
 }
 
@@ -169,6 +184,74 @@ func (b *Builder) VendorRate(connectionID int64, country string, networkID int64
 }
 
 func (b *Builder) Connection(c Connection) { b.s.connections[c.ID] = c }
+
+// Blacklist blocks a number for one client (clientID 0 = for every client).
+func (b *Builder) Blacklist(clientID int64, number string) {
+	n := NormalizeNumber(number)
+	if n == "" {
+		return
+	}
+	set := b.s.blacklist[clientID]
+	if set == nil {
+		set = map[string]struct{}{}
+		b.s.blacklist[clientID] = set
+	}
+	set[n] = struct{}{}
+}
+
+func (b *Builder) MORoute(r MORoute) {
+	r.Keyword = strings.ToUpper(strings.TrimSpace(r.Keyword))
+	r.NumberPrefix = NormalizeNumber(r.NumberPrefix)
+	b.s.moRoutes = append(b.s.moRoutes, &r)
+}
+
+// Blacklisted reports whether a normalized number is blocked for the client.
+func (s *Snapshot) Blacklisted(clientID int64, number string) bool {
+	if _, ok := s.blacklist[0][number]; ok {
+		return true
+	}
+	_, ok := s.blacklist[clientID][number]
+	return ok
+}
+
+// OptOutWords are replies that unsubscribe the sender.
+var OptOutWords = map[string]bool{"STOP": true, "UNSUBSCRIBE": true, "STOPALL": true, "END": true, "CANCEL": true, "OPTOUT": true}
+
+// FirstWord returns the upper-cased first word of a text.
+func FirstWord(text string) string {
+	f := strings.Fields(text)
+	if len(f) == 0 {
+		return ""
+	}
+	return strings.ToUpper(strings.Trim(f[0], ".,!?"))
+}
+
+// MatchMO finds the route for an incoming message sent to `to` with `text`. Routes with a keyword win over
+// routes without one; then the longest number prefix; then priority.
+func (s *Snapshot) MatchMO(to, text string) *MORoute {
+	to = NormalizeNumber(to)
+	word := FirstWord(text)
+	var best *MORoute
+	score := func(r *MORoute) int {
+		n := len(r.NumberPrefix) * 2
+		if r.Keyword != "" {
+			n += 1000
+		}
+		return n
+	}
+	for _, r := range s.moRoutes {
+		if r.NumberPrefix != "" && !strings.HasPrefix(to, r.NumberPrefix) {
+			continue
+		}
+		if r.Keyword != "" && r.Keyword != word {
+			continue
+		}
+		if best == nil || score(r) > score(best) || (score(r) == score(best) && r.Priority < best.Priority) {
+			best = r
+		}
+	}
+	return best
+}
 
 // Route adds a route. Regex patterns are compiled here; an invalid pattern is an error.
 func (b *Builder) Route(r Route) error {

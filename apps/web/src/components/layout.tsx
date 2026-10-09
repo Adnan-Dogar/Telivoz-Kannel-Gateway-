@@ -5,7 +5,7 @@ import { Command } from "cmdk";
 import {
   Activity, BarChart3, Building2, Cable, ChevronsLeft, ChevronsRight, CreditCard, FileClock, FlaskConical, KeyRound,
   LayoutDashboard, LogOut, Menu as MenuIcon, MessageSquareText, Moon, Route as RouteIcon, Search, Send, Settings, Sun, Tags,
-  Truck, Users, Wand2,
+  Truck, Users, Wand2, Ban, Inbox, ReceiptText,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useMe, useTheme } from "@/lib/session";
@@ -35,6 +35,8 @@ export const nav: { group: string; items: NavItem[] }[] = [
       { to: "/clients", label: "Clients", icon: Building2, show: staff },
       { to: "/accounts", label: "Accounts & API keys", icon: KeyRound },
       { to: "/billing", label: "Billing", icon: CreditCard, show: clientOnly },
+      { to: "/statements", label: "Statements", icon: ReceiptText },
+      { to: "/blacklist", label: "Blacklist", icon: Ban },
     ],
   },
   {
@@ -45,6 +47,7 @@ export const nav: { group: string; items: NavItem[] }[] = [
       { to: "/rates", label: "Rates", icon: Tags },
       { to: "/routes", label: "Routes", icon: RouteIcon, show: staff },
       { to: "/content-rules", label: "Content rules", icon: Wand2, show: staff },
+      { to: "/mo-routes", label: "Incoming routes", icon: Inbox, show: staff },
       { to: "/route-test", label: "Route tester", icon: FlaskConical, show: staff },
     ],
   },

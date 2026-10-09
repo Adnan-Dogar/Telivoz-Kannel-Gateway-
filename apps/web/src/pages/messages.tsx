@@ -15,7 +15,7 @@ import { Empty, Skeleton } from "@/components/ui/misc";
 import { Sheet } from "@/components/ui/sheet";
 import { TBody, TD, TH, THead, TR, Table } from "@/components/ui/table";
 
-const statuses = ["", "queued", "sent", "delivered", "undelivered", "rejected", "failed", "expired", "unknown"];
+const statuses = ["", "queued", "sent", "delivered", "undelivered", "rejected", "failed", "expired", "unknown", "received", "unrouted"];
 
 function Timeline({ m }: { m: Message }) {
   const failed = ["failed", "rejected", "undelivered", "expired"].includes(m.status);
@@ -104,6 +104,7 @@ export function MessagesPage() {
   const [q, setQ] = React.useState(search.q ?? "");
   const [term, setTerm] = React.useState(search.q ?? "");
   const [status, setStatus] = React.useState("");
+  const [direction, setDirection] = React.useState("");
   const [period, setPeriod] = usePeriod("7d");
   const [open, setOpen] = React.useState<string | null>(null);
   React.useEffect(() => {
@@ -118,8 +119,8 @@ export function MessagesPage() {
   }, [search.q]);
 
   const list = useQuery({
-    queryKey: ["messages", term, status, period.from, period.to],
-    queryFn: () => api.get<Message[]>(`/api/messages${qs({ q: term, status, from: period.from, to: period.to, limit: 200 })}`),
+    queryKey: ["messages", term, status, direction, period.from, period.to],
+    queryFn: () => api.get<Message[]>(`/api/messages${qs({ q: term, status, direction, from: period.from, to: period.to, limit: 200 })}`),
     refetchInterval: 15_000,
   });
 
@@ -132,6 +133,11 @@ export function MessagesPage() {
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Number, sender, text or message ID" className="pl-8" />
           </div>
+          <Select value={direction} onChange={(e) => setDirection(e.target.value)} className="w-40">
+            <option value="">All directions</option>
+            <option value="mt">Outgoing</option>
+            <option value="mo">Incoming (MO)</option>
+          </Select>
           <Select value={status} onChange={(e) => setStatus(e.target.value)} className="w-40">
             {statuses.map((s) => (
               <option key={s} value={s}>

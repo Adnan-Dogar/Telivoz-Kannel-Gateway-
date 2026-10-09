@@ -1,0 +1,13 @@
+# Keep the build context small and free of local data.
+.git
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/.env
+*.zip
+*.docx
+*.sql.gz
+gateway/bin
+apps/mobile
+docs
+legacy-hotfixes

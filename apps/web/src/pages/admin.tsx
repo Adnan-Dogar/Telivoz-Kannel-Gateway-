@@ -1,5 +1,7 @@
 import * as React from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import QRCode from "qrcode";
+import { ShieldCheck, ShieldOff } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { ago, dateTime } from "@/lib/format";
@@ -57,11 +59,17 @@ export function UsersPage() {
         path="users"
         noun="User"
         canWrite={can.admin(me)}
+        rowActions={(r) => can.admin(me) && r.totp_enabled && (
+          <Button size="sm" variant="ghost" onClick={() => api.post(`/api/users/${r.id}/reset-2fa`).then(() => toast.success("Two-factor login reset; the user signs in with the password only")).catch((e: Error) => toast.error(e.message))}>
+            <ShieldOff /> Reset 2FA
+          </Button>
+        )}
         columns={[
           { key: "name", header: "User", render: (r) => <div><p className="font-medium">{r.name || "—"}</p><p className="text-xs text-muted-foreground">{r.email}</p></div> },
           { key: "role", header: "Role", render: (r) => <Badge tone={r.role === "admin" ? "primary" : "neutral"}>{roles.find((x) => x.value === r.role)?.label ?? r.role}</Badge> },
           { key: "manager_name", header: "Reports to", render: (r) => r.manager_name ?? <span className="text-muted-foreground">—</span> },
           { key: "client_name", header: "Client", render: (r) => r.client_name ?? <span className="text-muted-foreground">—</span> },
+          { key: "totp_enabled", header: "2FA", render: (r) => (r.totp_enabled ? <Badge tone="success">on</Badge> : <Badge>off</Badge>) },
           { key: "last_login_at", header: "Last login", render: (r) => <span className="text-muted-foreground">{ago(r.last_login_at)}</span> },
           { key: "status", header: "Status", render: (r) => <StatusBadge status={r.status} /> },
         ]}
@@ -108,6 +116,57 @@ export function AuditPage() {
   );
 }
 
+function TwoFactorCard() {
+  const me = useMe();
+  const qc = useQueryClient();
+  const [setup, setSetup] = React.useState<{ secret: string; qr: string } | null>(null);
+  const [code, setCode] = React.useState("");
+  const start = useMutation({
+    mutationFn: () => api.post<{ secret: string; otpauth_url: string }>("/api/auth/2fa/setup"),
+    onSuccess: async (r) => setSetup({ secret: r.secret, qr: await QRCode.toDataURL(r.otpauth_url, { margin: 1, width: 200 }) }),
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const enable = useMutation({
+    mutationFn: () => api.post("/api/auth/2fa/enable", { code }),
+    onSuccess: () => { toast.success("Two-factor login is on"); setSetup(null); setCode(""); qc.invalidateQueries({ queryKey: ["me"] }); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const disable = useMutation({
+    mutationFn: () => api.post("/api/auth/2fa/disable", { code }),
+    onSuccess: () => { toast.success("Two-factor login is off"); setCode(""); qc.invalidateQueries({ queryKey: ["me"] }); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  return (
+    <Card>
+      <CardHeader title="Two-factor login" description="Ask for a code from an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password…) at sign-in." />
+      <CardBody>
+        {me.totp_enabled ? (
+          <div className="grid gap-4">
+            <p className="flex items-center gap-2 text-sm font-medium text-success"><ShieldCheck className="size-4" /> On for your account</p>
+            <Field label="Code from your app, to turn it off"><Input inputMode="numeric" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} /></Field>
+            <div><Button variant="outline" onClick={() => disable.mutate()} disabled={code.length !== 6}><ShieldOff /> Turn off</Button></div>
+          </div>
+        ) : setup ? (
+          <div className="grid gap-4 sm:grid-cols-[auto_1fr]">
+            <img src={setup.qr} alt="QR code for your authenticator app" className="size-48 rounded-lg border bg-white p-2" />
+            <div className="grid content-start gap-3">
+              <p className="text-sm">Scan the code with your app, or enter this key:</p>
+              <code className="break-all rounded-md bg-muted px-2 py-1 text-xs">{setup.secret}</code>
+              <Field label="Then enter the 6-digit code"><Input inputMode="numeric" maxLength={6} autoFocus value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} /></Field>
+              <div><Button onClick={() => enable.mutate()} disabled={code.length !== 6 || enable.isPending}><ShieldCheck /> Confirm and turn on</Button></div>
+            </div>
+          </div>
+        ) : (
+          <div className="grid gap-3">
+            <p className="text-sm text-muted-foreground">Off. Strongly recommended for administrators and finance users.</p>
+            <div><Button onClick={() => start.mutate()} disabled={start.isPending}><ShieldCheck /> Set up</Button></div>
+          </div>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
 export function SettingsPage() {
   const me = useMe();
   const { dark, toggle } = useTheme();
@@ -132,6 +191,7 @@ export function SettingsPage() {
             <div className="flex items-center justify-between border-t pt-3"><span>Dark mode</span><Switch checked={dark} onCheckedChange={toggle} /></div>
           </CardBody>
         </Card>
+        <TwoFactorCard />
         <Card>
           <CardHeader title="Change password" />
           <CardBody>

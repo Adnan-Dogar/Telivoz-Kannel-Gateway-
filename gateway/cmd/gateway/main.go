@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	_ "time/tzdata" // embedded time zones: the binary needs no tzdata package on the host or in the image
 
 	"github.com/Adnan-Dogar/telivoz-gateway/internal/api"
 	"github.com/Adnan-Dogar/telivoz-gateway/internal/auth"

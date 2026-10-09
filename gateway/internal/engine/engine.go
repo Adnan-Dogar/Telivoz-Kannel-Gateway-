@@ -31,8 +31,9 @@ type Engine struct {
 	vmu     sync.Mutex
 	vendors map[int64]*vendorConn
 
-	reloadMu sync.Mutex
-	ctx      context.Context
+	reloadMu      sync.Mutex
+	reloadPending atomic.Bool
+	ctx           context.Context
 
 	// VendorResponseTimeout is how long to wait for a vendor's submit_sm_resp before giving up (without
 	// resending). Defaults to 30s.
@@ -265,7 +266,54 @@ func (e *Engine) loadSnapshot(ctx context.Context) (*routing.Snapshot, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	rows, err = e.db.Query(ctx, `SELECT COALESCE(client_id, 0), number FROM blacklist`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var cid int64
+		var n string
+		if err := rows.Scan(&cid, &n); err != nil {
+			return nil, err
+		}
+		b.Blacklist(cid, n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	rows, err = e.db.Query(ctx, `SELECT id, name, priority, number_prefix, keyword, client_id, COALESCE(account_id, 0), auto_opt_out
+		FROM mo_routes WHERE status = 'active'`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var r routing.MORoute
+		if err := rows.Scan(&r.ID, &r.Name, &r.Priority, &r.NumberPrefix, &r.Keyword, &r.ClientID, &r.AccountID, &r.AutoOptOut); err != nil {
+			return nil, err
+		}
+		b.MORoute(r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return b.Build(), nil
+}
+
+// requestReload reloads configuration soon, coalescing bursts of changes (e.g. many opt-outs) into one reload.
+func (e *Engine) requestReload() {
+	if !e.reloadPending.CompareAndSwap(false, true) {
+		return
+	}
+	time.AfterFunc(2*time.Second, func() {
+		e.reloadPending.Store(false)
+		if e.ctx == nil {
+			return
+		}
+		if err := e.Reload(e.ctx); err != nil {
+			e.log.Error("reload failed", "err", err)
+		}
+	})
 }
 
 func (e *Engine) limiter(accountID int64, tps int) *tokenBucket {

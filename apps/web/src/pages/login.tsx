@@ -10,6 +10,8 @@ export function LoginPage() {
   const qc = useQueryClient();
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
+  const [code, setCode] = React.useState("");
+  const [needCode, setNeedCode] = React.useState(false);
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState(false);
 
@@ -18,9 +20,14 @@ export function LoginPage() {
     setBusy(true);
     setError("");
     try {
-      const me = await api.post<Me>("/api/auth/login", { email, password });
+      const me = await api.post<Me>("/api/auth/login", { email, password, code });
       qc.setQueryData(["me"], me);
     } catch (err) {
+      if (err instanceof ApiError && err.code === "totp_required") {
+        setNeedCode(true);
+        setError("");
+        return;
+      }
       setError(err instanceof ApiError ? err.message : "Cannot reach the server");
     } finally {
       setBusy(false);
@@ -69,6 +76,11 @@ export function LoginPage() {
             <Field label="Password">
               <Input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
             </Field>
+            {needCode && (
+              <Field label="Authenticator code" hint="Two-factor login is on for this account.">
+                <Input inputMode="numeric" autoComplete="one-time-code" autoFocus maxLength={6} required value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} placeholder="123456" className="tracking-[0.4em]" />
+              </Field>
+            )}
           </div>
           {error && <p className="rounded-md bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p>}
           <Button type="submit" className="w-full" size="lg" disabled={busy}>

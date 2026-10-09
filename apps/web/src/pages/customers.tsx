@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, KeyRound, Plus, Wallet } from "lucide-react";
+import { Copy, KeyRound, Plus, ReceiptText, Wallet } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { dateTime, money } from "@/lib/format";
@@ -99,6 +100,7 @@ export function ClientsPage() {
           <div className="flex justify-end gap-1">
             {can.money(me) && <Button size="sm" variant="ghost" onClick={() => setTopup(r)}><Plus /> Credit</Button>}
             <Button size="sm" variant="ghost" onClick={() => setLedger(r)}><Wallet /> Ledger</Button>
+            <Button size="sm" variant="ghost" asChild><Link to="/statements" search={{ client: String(r.id), month: undefined }}><ReceiptText /> Statement</Link></Button>
           </div>
         )}
         fields={[
@@ -112,6 +114,7 @@ export function ClientsPage() {
           { name: "owner_id", label: "Account manager", type: "select", options: (l) => l.users.map((u) => ({ value: String(u.id), label: `${u.name} (${u.role.replace("_", " ")})` })) },
           { name: "dlr_webhook_url", label: "DLR webhook URL", placeholder: "https://…", hint: "HTTP clients receive delivery reports here." },
           { name: "dlr_format", label: "Webhook format", type: "select", default: "v1", span: 1, options: [{ value: "v1", label: "New JSON (v1)" }, { value: "legacy", label: "Old system format" }] },
+          { name: "mo_webhook_url", label: "Incoming messages (MO) webhook URL", placeholder: "https://…", hint: "Replies to the client's short codes are posted here unless an SMPP account is set on the incoming route." },
           { name: "status", label: "Status", type: "select", default: "active", span: 1, required: true, options: statusOptions },
         ]}
       />

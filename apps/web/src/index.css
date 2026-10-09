@@ -91,3 +91,10 @@
 
 @keyframes pulse-dot { 0%, 100% { opacity: 1 } 50% { opacity: 0.35 } }
 .pulse-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
+
+/* Printing (statements): only the page content. */
+@media print {
+  aside, header { display: none !important; }
+  main { overflow: visible !important; }
+  body { background: white; }
+}

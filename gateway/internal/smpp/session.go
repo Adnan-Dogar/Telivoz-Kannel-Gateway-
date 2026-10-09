@@ -40,17 +40,17 @@ type SessionOptions struct {
 
 // Session is one SMPP connection, either side.
 type Session struct {
-	conn    net.Conn
-	opts    SessionOptions
-	wmu     sync.Mutex
-	seq     atomic.Uint32
-	pmu     sync.Mutex
-	pending map[uint32]chan *PDU
-	window  chan struct{}
+	conn     net.Conn
+	opts     SessionOptions
+	wmu      sync.Mutex
+	seq      atomic.Uint32
+	pmu      sync.Mutex
+	pending  map[uint32]chan *PDU
+	window   chan struct{}
 	inflight chan struct{}
-	closed  chan struct{}
-	once    sync.Once
-	lastRx  atomic.Int64
+	closed   chan struct{}
+	once     sync.Once
+	lastRx   atomic.Int64
 
 	// Set by the owner after a successful bind.
 	BindCommand uint32
@@ -80,7 +80,7 @@ func NewSession(conn net.Conn, opts SessionOptions) *Session {
 	return s
 }
 
-func (s *Session) RemoteAddr() net.Addr { return s.conn.RemoteAddr() }
+func (s *Session) RemoteAddr() net.Addr  { return s.conn.RemoteAddr() }
 func (s *Session) Done() <-chan struct{} { return s.closed }
 
 // CanReceive reports whether the peer bound in a mode that accepts deliver_sm.

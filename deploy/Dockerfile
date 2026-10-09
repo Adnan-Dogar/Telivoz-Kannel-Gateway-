@@ -17,8 +17,9 @@ COPY gateway/ ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/gateway ./cmd/gateway \
  && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/smppsim ./cmd/smppsim
 
+# The Alpine base already carries the CA bundle, and the binary embeds time zone data, so nothing is downloaded here.
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates tzdata && adduser -D -H -u 10001 gateway
+RUN adduser -D -H -u 10001 gateway
 COPY --from=go /out/ /usr/local/bin/
 COPY --from=web /src/apps/web/dist /srv/web
 USER gateway
