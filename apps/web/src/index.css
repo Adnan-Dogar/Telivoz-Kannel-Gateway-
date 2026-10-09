@@ -1,0 +1,93 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Design tokens (light). Dark values below. */
+:root {
+  --background: oklch(0.985 0.002 264);
+  --foreground: oklch(0.21 0.02 264);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.21 0.02 264);
+  --muted: oklch(0.965 0.005 264);
+  --muted-foreground: oklch(0.52 0.02 264);
+  --border: oklch(0.92 0.006 264);
+  --input: oklch(0.9 0.008 264);
+  --primary: oklch(0.51 0.23 277);
+  --primary-foreground: oklch(0.99 0 0);
+  --accent: oklch(0.955 0.02 277);
+  --accent-foreground: oklch(0.35 0.15 277);
+  --success: oklch(0.62 0.16 150);
+  --warning: oklch(0.75 0.16 75);
+  --danger: oklch(0.6 0.22 25);
+  --ring: oklch(0.51 0.23 277 / 0.45);
+  --chart-1: oklch(0.55 0.22 277);
+  --chart-2: oklch(0.68 0.15 160);
+  --chart-3: oklch(0.72 0.16 60);
+  --chart-4: oklch(0.62 0.2 20);
+  --chart-5: oklch(0.65 0.13 230);
+  --sidebar: oklch(0.99 0.002 264);
+}
+
+.dark {
+  --background: oklch(0.16 0.015 268);
+  --foreground: oklch(0.95 0.005 264);
+  --card: oklch(0.2 0.018 268);
+  --card-foreground: oklch(0.95 0.005 264);
+  --muted: oklch(0.25 0.018 268);
+  --muted-foreground: oklch(0.7 0.015 264);
+  --border: oklch(0.29 0.02 268);
+  --input: oklch(0.32 0.02 268);
+  --primary: oklch(0.66 0.19 277);
+  --primary-foreground: oklch(0.15 0.02 268);
+  --accent: oklch(0.28 0.05 277);
+  --accent-foreground: oklch(0.9 0.05 277);
+  --success: oklch(0.72 0.16 150);
+  --warning: oklch(0.8 0.15 80);
+  --danger: oklch(0.68 0.2 25);
+  --ring: oklch(0.66 0.19 277 / 0.5);
+  --chart-1: oklch(0.7 0.17 277);
+  --chart-2: oklch(0.75 0.14 160);
+  --chart-3: oklch(0.8 0.14 70);
+  --chart-4: oklch(0.7 0.18 25);
+  --chart-5: oklch(0.72 0.12 230);
+  --sidebar: oklch(0.18 0.016 268);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --radius-lg: 0.75rem;
+  --radius-md: 0.5rem;
+}
+
+@layer base {
+  * { @apply border-border; }
+  html, body, #root { height: 100%; }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  ::selection { background: color-mix(in oklch, var(--primary) 25%, transparent); }
+}
+
+.tabular { font-variant-numeric: tabular-nums; }
+
+@keyframes pulse-dot { 0%, 100% { opacity: 1 } 50% { opacity: 0.35 } }
+.pulse-dot { animation: pulse-dot 1.6s ease-in-out infinite; }

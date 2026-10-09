@@ -143,7 +143,10 @@ var resources = []*resource{
 		search: []string{"name", "sender_pattern"},
 		extraCols: `, (SELECT COALESCE(jsonb_agg(jsonb_build_object('connection_id', rt.connection_id, 'position', rt.position,
 			'weight', rt.weight, 'name', c.name) ORDER BY rt.position), '[]') FROM route_targets rt JOIN connections c ON c.id = rt.connection_id
-			WHERE rt.route_id = t.id) AS targets`,
+			WHERE rt.route_id = t.id) AS targets,
+			(SELECT name FROM clients c WHERE c.id = t.client_id) AS client_name,
+			(SELECT username FROM accounts a WHERE a.id = t.account_id) AS account_name,
+			(SELECT name || ' (' || mcc || '-' || mnc || ')' FROM networks n WHERE n.id = t.network_id) AS network_name`,
 		canRead: staff, canWrite: managers, reloads: true,
 		afterWrite: func(ctx context.Context, s *Server, id int64, in map[string]any, _ bool) error {
 			raw, ok := in["targets"]

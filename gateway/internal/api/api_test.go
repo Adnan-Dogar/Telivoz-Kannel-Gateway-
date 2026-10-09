@@ -282,8 +282,10 @@ func TestClientAPIv1AndLegacy(t *testing.T) {
 
 func TestStatsEndpoints(t *testing.T) {
 	e := setup(t)
-	tu.Exec(t, e.pool, `INSERT INTO stats_hourly (hour, client_id, connection_id, country_iso, submitted, sent, delivered, undelivered, revenue, cost)
-		VALUES (date_trunc('hour', now()) - interval '1 hour', $1, 1, 'PK', 100, 100, 90, 10, 1.0, 0.4)`, e.f.ClientID)
+	// Latency 12345 ms over 7 DLRs gives a fractional average (1763.57), which must still load.
+	tu.Exec(t, e.pool, `INSERT INTO stats_hourly (hour, client_id, connection_id, country_iso, submitted, sent, delivered, undelivered, revenue, cost,
+			dlr_latency_ms_sum, dlr_latency_count)
+		VALUES (date_trunc('hour', now()) - interval '1 hour', $1, 1, 'PK', 100, 100, 90, 10, 1.0, 0.4, 12345, 7)`, e.f.ClientID)
 	b := e.browser()
 	b.login("admin@test", "admin123")
 	code, ov, raw := b.do("GET", "/api/stats/overview", nil, false)
@@ -296,7 +298,8 @@ func TestStatsEndpoints(t *testing.T) {
 	}
 	code, bd, raw := b.do("GET", "/api/stats/breakdown?dim=client", nil, false)
 	rows := bd["rows"].([]any)
-	if code != 200 || len(rows) != 1 || rows[0].(map[string]any)["dlr_rate"] != 0.9 || rows[0].(map[string]any)["label"] != "Acme" {
+	if code != 200 || len(rows) != 1 || rows[0].(map[string]any)["dlr_rate"] != 0.9 || rows[0].(map[string]any)["label"] != "Acme" ||
+		rows[0].(map[string]any)["avg_dlr_ms"] != float64(1764) {
 		t.Fatalf("breakdown: %d %s", code, raw)
 	}
 	resp, _ := b.http.Get(e.srv.URL + "/api/stats/breakdown?dim=country&format=csv")

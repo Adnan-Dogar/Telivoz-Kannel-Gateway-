@@ -49,7 +49,10 @@ func (s *Server) statsLive(w http.ResponseWriter, r *http.Request) {
 func (s *Server) statsOverview(w http.ResponseWriter, r *http.Request) {
 	from, to := period(r)
 	bucket := "hour"
-	if to.Sub(from) > 72*time.Hour {
+	switch span := to.Sub(from); {
+	case span > 400*24*time.Hour:
+		bucket = "month"
+	case span > 72*time.Hour:
 		bucket = "day"
 	}
 	cond, args := s.statsScope(r)
@@ -64,11 +67,17 @@ func (s *Server) statsOverview(w http.ResponseWriter, r *http.Request) {
 		'from', $%[2]d::timestamptz, 'to', $%[3]d::timestamptz, 'bucket', '%[4]s',
 		'totals', (SELECT %[5]s FROM stats_hourly s WHERE %[1]s AND hour >= date_trunc('hour', $%[2]d::timestamptz) AND hour < $%[3]d),
 		'previous', (SELECT %[5]s FROM stats_hourly s WHERE %[1]s AND hour >= date_trunc('hour', $%[6]d::timestamptz) AND hour < date_trunc('hour', $%[2]d::timestamptz)),
-		'series', COALESCE((SELECT jsonb_agg(x ORDER BY x.t) FROM (
-			SELECT date_trunc('%[4]s', hour) AS t, sum(submitted) AS submitted, sum(sent) AS sent, sum(delivered) AS delivered,
-				sum(undelivered) AS undelivered, sum(failed + rejected) AS failed, sum(revenue) AS revenue, sum(cost) AS cost
-			FROM stats_hourly s WHERE %[1]s AND hour >= date_trunc('hour', $%[2]d::timestamptz) AND hour < $%[3]d
-			GROUP BY 1) x), '[]'))`, cond, n+1, n+2, bucket, totals, n+3)
+		'series', COALESCE((SELECT jsonb_agg(jsonb_build_object('t', b.t, 'submitted', COALESCE(x.submitted, 0), 'sent', COALESCE(x.sent, 0),
+				'delivered', COALESCE(x.delivered, 0), 'undelivered', COALESCE(x.undelivered, 0), 'failed', COALESCE(x.failed, 0),
+				'revenue', COALESCE(x.revenue, 0), 'cost', COALESCE(x.cost, 0)) ORDER BY b.t)
+			FROM generate_series(date_trunc('%[4]s', GREATEST($%[2]d::timestamptz,
+					COALESCE((SELECT min(hour) FROM stats_hourly s WHERE %[1]s), $%[2]d::timestamptz))),
+				date_trunc('%[4]s', $%[3]d::timestamptz - interval '1 second'), interval '1 %[4]s') AS b(t)
+			LEFT JOIN (
+				SELECT date_trunc('%[4]s', hour) AS t, sum(submitted) AS submitted, sum(sent) AS sent, sum(delivered) AS delivered,
+					sum(undelivered) AS undelivered, sum(failed + rejected) AS failed, sum(revenue) AS revenue, sum(cost) AS cost
+				FROM stats_hourly s WHERE %[1]s AND hour >= date_trunc('hour', $%[2]d::timestamptz) AND hour < $%[3]d
+				GROUP BY 1) x ON x.t = b.t), '[]'))`, cond, n+1, n+2, bucket, totals, n+3)
 	var raw []byte
 	if err := s.db.QueryRow(r.Context(), sql, args...).Scan(&raw); err != nil {
 		s.dbError(w, err)
@@ -106,10 +115,10 @@ func (s *Server) statsBreakdown(w http.ResponseWriter, r *http.Request) {
 	sql := fmt.Sprintf(`SELECT k, label, submitted, sent, delivered, undelivered, failed, revenue, cost, avg_dlr_ms FROM (
 		SELECT (%[1]s)::text AS k, min(%[2]s) AS label, sum(submitted) AS submitted, sum(sent) AS sent, sum(delivered) AS delivered,
 			sum(undelivered) AS undelivered, sum(failed + rejected) AS failed, sum(revenue) AS revenue, sum(cost) AS cost,
-			COALESCE(sum(dlr_latency_ms_sum) / NULLIF(sum(dlr_latency_count), 0), 0) AS avg_dlr_ms
-		FROM stats_hourly s WHERE %[3]s AND hour >= date_trunc('hour', $%[4]d::timestamptz) AND hour < $%[5]d
+			COALESCE(round(sum(dlr_latency_ms_sum)::numeric / NULLIF(sum(dlr_latency_count), 0))::bigint, 0) AS avg_dlr_ms
+		FROM stats_hourly s WHERE %[3]s AND %[6]s AND hour >= date_trunc('hour', $%[4]d::timestamptz) AND hour < $%[5]d
 		GROUP BY 1) x WHERE submitted + sent + delivered + undelivered + failed > 0 ORDER BY submitted DESC, sent DESC LIMIT 500`,
-		dim.key, dim.label, cond, n+1, n+2)
+		dim.key, dim.label, cond, n+1, n+2, map[bool]string{true: "s.connection_id <> 0", false: "true"}[dimName == "vendor" || dimName == "connection"])
 	rows, err := s.db.Query(r.Context(), sql, args...)
 	if err != nil {
 		s.dbError(w, err)
