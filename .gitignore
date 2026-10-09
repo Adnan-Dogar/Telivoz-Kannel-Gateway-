@@ -1,0 +1,6 @@
+# build output
+/gateway/bin/
+/apps/web/dist/
+node_modules/
+*.log
+.env
