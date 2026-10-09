@@ -1,0 +1,60 @@
+# Telivoz gateway stack. Copy gateway.env.example to gateway.env and fill it in first.
+#   docker compose up -d                          gateway + PostgreSQL
+#   docker compose --profile monitoring up -d     + Prometheus and Grafana
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: gateway
+      POSTGRES_USER: gateway
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    command: >
+      postgres -c shared_buffers=4GB -c effective_cache_size=12GB -c work_mem=32MB
+               -c max_connections=200 -c wal_compression=on -c checkpoint_timeout=15min
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway"]
+      interval: 5s
+      retries: 20
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    env_file: gateway.env
+    environment:
+      DATABASE_URL: postgres://gateway:${POSTGRES_PASSWORD}@postgres:5432/gateway?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+      - "${SMPP_PORT:-2775}:2775"
+
+  prometheus:
+    image: prom/prometheus:v3.4.0
+    profiles: [monitoring]
+    restart: unless-stopped
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - promdata:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  grafana:
+    image: grafana/grafana:12.0.1
+    profiles: [monitoring]
+    restart: unless-stopped
+    volumes:
+      - grafanadata:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  pgdata:
+  promdata:
+  grafanadata:

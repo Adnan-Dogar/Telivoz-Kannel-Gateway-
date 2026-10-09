@@ -1,0 +1,23 @@
+groups:
+  - name: gateway
+    rules:
+      - alert: VendorBindDown
+        expr: gateway_vendor_binds_down > 0
+        for: 2m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $value }} vendor bind(s) not bound for 2 minutes" }
+      - alert: SendQueueGrowing
+        expr: gateway_send_queue > 5000 and deriv(gateway_send_queue[5m]) > 0
+        for: 5m
+        labels: { severity: critical }
+        annotations: { summary: "Send queue at {{ $value }} and still growing: vendors are not keeping up" }
+      - alert: DLRsNotReachingClients
+        expr: gateway_dlr_outbox > 10000
+        for: 10m
+        labels: { severity: warning }
+        annotations: { summary: "{{ $value }} DLRs waiting for clients that are not bound" }
+      - alert: NoTraffic
+        expr: gateway_tps_in == 0 and hour() >= 6 and hour() <= 22
+        for: 15m
+        labels: { severity: warning }
+        annotations: { summary: "No incoming traffic for 15 minutes during the day" }
