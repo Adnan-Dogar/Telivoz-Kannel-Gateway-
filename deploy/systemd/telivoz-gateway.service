@@ -1,0 +1,21 @@
+[Unit]
+Description=Telivoz SMS gateway
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=telivoz
+Group=telivoz
+EnvironmentFile=/etc/telivoz/gateway.env
+ExecStart=/opt/telivoz/bin/gateway serve
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65536
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
