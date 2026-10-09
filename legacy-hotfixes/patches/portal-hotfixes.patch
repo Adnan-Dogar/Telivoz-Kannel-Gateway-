@@ -1,0 +1,290 @@
+diff -ru a/commands/DeliveryReportsController.php b/commands/DeliveryReportsController.php
+--- a/commands/DeliveryReportsController.php
++++ b/commands/DeliveryReportsController.php
+@@ -95,8 +95,8 @@
+         curl_setopt($ch, CURLOPT_URL, $url);
+         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+         curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_ANY);
+-        curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+-        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 60);
++        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
++        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
+         $response = curl_exec($ch);
+         $HTTPStatusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+ 
+diff -ru a/commands/KannelController.php b/commands/KannelController.php
+--- a/commands/KannelController.php
++++ b/commands/KannelController.php
+@@ -17,15 +17,12 @@
+         $command = $connection->createCommand("SELECT * FROM kannel_restart_status WHERE restart  = 1");
+         $result = $command->execute();
+         if ($result > 0) {
+-            \CoreUtils::flog('KANNEL', "There was a change in routing...now restarting kannel");
+-           //shell_exec("sudo kill $(ps aux | grep 'kannel' | awk '{print $2}')");
+-            shell_exec('sudo service kannel stop');
+-           \CoreUtils::flog('KANNEL', "Kannel stopped successfully");
+-            sleep(2);
+-            shell_exec('sudo service kannel start');
+-            //shell_exec('sudo systemctl restart smsbox');
+-            //shell_exec('sudo systemctl restart smppbox');
+-            \CoreUtils::flog('KANNEL', "Kannel started successfully");
++            //Only smsbox reads smsbox-route.conf, so restart smsbox alone. Restarting bearerbox would drop
++            //its in-memory queue and DLR store (lost DLRs) and re-queue unacknowledged messages (duplicates).
++            $command = \Yii::$app->params['kannel_route_restart_command'] ?? 'sudo systemctl restart smsbox';
++            \CoreUtils::flog('KANNEL', "There was a change in routing...now running: $command");
++            $output = shell_exec($command . ' 2>&1');
++            \CoreUtils::flog('KANNEL', "Restart finished " . trim((string) $output));
+             \app\models\KannelRestartStatus::updateAll(['restart' => 0], ['id' => 1]);
+         } else {
+             \CoreUtils::flog('KANNEL', "There no need to restart at this time");
+diff -ru a/controllers/ApiController.php b/controllers/ApiController.php
+--- a/controllers/ApiController.php
++++ b/controllers/ApiController.php
+@@ -101,6 +101,15 @@
+         }
+ 
+         $data['from'] = str_replace('+', '', $data['from']);
++
++        //duplicate protection: Kannel retries a submit it considers failed (e.g. a slow reply) with the same
++        //message ID. Accept each client message ID once per destination and answer retries with the original result.
++        $duplicate = self::lockAndFindDuplicate($data);
++        if ($duplicate) {
++            \CoreUtils::flog('SMSAPIINFO', "Duplicate submit ignored for client " . $data['client_id'] . " messageid " . $data['messageid'] . " to " . $data['to'] . " - original id " . $duplicate);
++            return json_encode(self::successPayload($data, $duplicate));
++        }
++
+         //get billing & routing info UKU
+         $routeinfo = [];
+         $route = self::fetchRoute($data, $routeinfo);
+@@ -178,9 +187,37 @@
+             return json_encode($payload);
+         }
+ 
+-        //deduct credits
+-        $billclient = self::billClient($data);
+-        if (!$billclient) {
++        $status = 0;
++        $data['response'] = "accepted for delivery";
++
++        $data['status'] = $status;
++
++        //store the message and charge it in one transaction: a message is never charged without being
++        //stored, never stored without being charged, and no refund is needed when either step fails
++        $send_sms = false;
++        $billclient = false;
++        $transaction = \Yii::$app->db->beginTransaction();
++        try {
++            $send_sms = self::sendSMS($data);
++            $billclient = $send_sms ? self::billClient($data) : false;
++            if ($send_sms && $billclient) {
++                $transaction->commit();
++            } else {
++                $transaction->rollBack();
++            }
++        } catch (\Throwable $e) {
++            $transaction->rollBack();
++            \CoreUtils::flog('SMSAPIINFO', "Store/charge failed for client " . $data['client_id'] . ": " . $e->getMessage());
++            //a unique-key conflict means another process stored the same message first
++            $duplicate = self::findDuplicate($data);
++            if ($duplicate) {
++                return json_encode(self::successPayload($data, $duplicate));
++            }
++            $send_sms = false;
++            $billclient = false;
++        }
++
++        if ($send_sms && !$billclient) {
+             $payload = ['status' => 408, 'description' => "Unable to bill"];
+             \CoreUtils::flog('INFO', "unable to bill returning response " . json_encode($payload) . " response to payload " . json_encode($data));
+             $data['status'] = 408;
+@@ -189,16 +226,7 @@
+             return json_encode($payload);
+         }
+ 
+-        $status = 0;
+-        $data['response'] = "accepted for delivery";
+-
+-        $data['status'] = $status;
+-
+-        //everything is good ....send sms
+-        $send_sms = self::sendSMS($data);
+         if (!$send_sms) {
+-            //refund credits
+-            $billclient = self::refundCredits($data);
+             $payload = ['status' => 500, 'description' => "Unable to send SMS. Internal Error"];
+             \CoreUtils::flog('INFO', "returning response " . json_encode($payload) . " response to payload " . json_encode($data));
+             $data['status'] = 500;
+@@ -207,10 +235,42 @@
+             return json_encode($payload);
+         }
+ 
+-        $message_id = $data['messageid'] ?? $send_sms;
+-        $payload = ['status' => 1, 'statusCode' => 200, 'description' => "Success [" . $message_id . "]", 'reference' => $send_sms];
+-        $encodePayload = json_encode($payload);
+-        return $encodePayload;
++        return json_encode(self::successPayload($data, $send_sms));
++    }
++
++    public static function successPayload($data, $reference) {
++        $message_id = $data['messageid'] ?? $reference;
++        return ['status' => 1, 'statusCode' => 200, 'description' => "Success [" . $message_id . "]", 'reference' => $reference];
++    }
++
++    /**
++     * Serializes submits that carry the same client message ID and destination, then returns the ID of an
++     * already stored copy (or false). The lock is released when the request ends.
++     */
++    public static function lockAndFindDuplicate($data) {
++        if (empty($data['messageid']) || empty($data['to'])) {
++            return false;
++        }
++        $lockName = 'sms:' . md5($data['client_id'] . ':' . $data['messageid'] . ':' . $data['to']);
++        $db = \Yii::$app->db;
++        $db->createCommand('SELECT GET_LOCK(:name, 10)', [':name' => $lockName])->queryScalar();
++        register_shutdown_function(function () use ($db, $lockName) {
++            try {
++                $db->createCommand('SELECT RELEASE_LOCK(:name)', [':name' => $lockName])->queryScalar();
++            } catch (\Throwable $e) {
++            }
++        });
++        return self::findDuplicate($data);
++    }
++
++    public static function findDuplicate($data) {
++        if (empty($data['messageid']) || empty($data['to'])) {
++            return false;
++        }
++        $id = (new \yii\db\Query())->select('id')->from('outgoing_sms')
++            ->where(['client_id' => $data['client_id'], 'external_message_id' => $data['messageid'], 'destination' => $data['to']])
++            ->scalar();
++        return $id ?: false;
+     }
+ 
+     public static function fetchRoute($data, &$routingdata) {
+@@ -330,7 +390,12 @@
+         //calculate messaes
+         $credits_used = $data['credits_used'];
+         \CoreUtils::flog('SMSAPIINFO', "About to bill the client " . $data['client_id'] . " ..$credits_used credits");
+-        $bill = \app\models\SmsCreditsBalances::updateAll(['balance' => new \yii\db\Expression("balance - $credits_used")], ['client_id' => $data['client_id']]);
++        //only debit when the balance covers the charge, so concurrent sends cannot overdraw the account
++        $credits_used = (float) $credits_used;
++        $bill = \app\models\SmsCreditsBalances::updateAll(
++            ['balance' => new \yii\db\Expression("balance - " . $credits_used)],
++            ['and', ['client_id' => $data['client_id']], ['>=', 'balance', $credits_used]]
++        );
+         if ($bill) {
+             \CoreUtils::flog('SMSAPIINFO', "Client " . $data['client_id'] . " billed successfully by $credits_used credits ");
+             return true;
+@@ -430,7 +495,7 @@
+         if (!empty($external_message_id)) {
+             $url = "http://localhost:13051/sms?dlr-mask=$status&dlr-mid=$external_message_id";
+             \CoreUtils::flog('DLRPROCESSOR', "About to inject dlr to kannel  " . print_r($url, true));
+-            $inject = file_get_contents($url);
++            $inject = @file_get_contents($url, false, stream_context_create(['http' => ['timeout' => 5]]));
+             \CoreUtils::flog('DLRPROCESSOR', "Results after dlr  " . print_r($inject, true));
+         } else {
+             \CoreUtils::flog('DLRPROCESSOR', "No need to send to kannel " . print_r($message_id));
+diff -ru a/libraries/CoreUtils.php b/libraries/CoreUtils.php
+--- a/libraries/CoreUtils.php
++++ b/libraries/CoreUtils.php
+@@ -2055,25 +2055,49 @@
+     }
+ 
+     public static function check_status_smsc($smsc_name) {
+-        $url = CoreUtils::getConfigurationValue('kannel_config');
+-        $link = $url['base_url'];
+-        $password = $url['password'];
+-        $xml = simplexml_load_file("$link/status.xml?password=$password") or die("feed not loading");
+-        $smscs = $xml->smscs->smsc;
+-        $a = "";
+-        //echo "<pre>" . print_r($status[0], true) . "</pre>";        exit;
+-        foreach ($smscs as $node) {
+-            $smsc_r = self::xml2array($node->id);
+-            $smsc = $smsc_r[0];
+-            $status_r = self::xml2array($node->status);
+-            $status = $status_r[0];
+-            if ($smsc == $smsc_name) {
+-                if (strpos($status, 'online') !== false) {
+-                    return true;
++        $statuses = self::getSmscStatuses();
++        if (!$statuses['ok']) {
++            //status page unavailable: let Kannel queue the message instead of failing it or stopping the batch
++            return true;
++        }
++        return isset($statuses['smscs'][$smsc_name]) && strpos($statuses['smscs'][$smsc_name], 'online') !== false;
++    }
++
++    //reads Kannel's status.xml at most once every few seconds instead of once per message, with timeouts
++    public static function getSmscStatuses() {
++        $cache = \Yii::$app->cache;
++        $cacheKey = 'kannel_smsc_statuses';
++        $cached = $cache ? $cache->get($cacheKey) : false;
++        if ($cached !== false) {
++            return $cached;
++        }
++
++        $config = CoreUtils::getConfigurationValue('kannel_config');
++        $ch = curl_init($config['base_url'] . '/status.xml?password=' . urlencode($config['password']));
++        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_CONNECTTIMEOUT => 3, CURLOPT_TIMEOUT => 5]);
++        $body = curl_exec($ch);
++        curl_close($ch);
++
++        $xml = $body ? @simplexml_load_string($body) : false;
++        $statuses = ['ok' => false, 'smscs' => []];
++        if ($xml && isset($xml->smscs->smsc)) {
++            $statuses['ok'] = true;
++            foreach ($xml->smscs->smsc as $node) {
++                $smsc = (string) $node->id;
++                $status = (string) $node->status;
++                //several binds share one smsc-id: online if any bind is online
++                if (!isset($statuses['smscs'][$smsc]) || strpos($status, 'online') !== false) {
++                    $statuses['smscs'][$smsc] = $status;
+                 }
+             }
++        } else {
++            \CoreUtils::flog('BULKSMS', "Kannel status page unavailable, sending without SMSC status check");
++        }
++
++        if ($cache) {
++            $cache->set($cacheKey, $statuses, 5);
+         }
+-        return false;
++        return $statuses;
+     }
+ 
+     public static function xml2array($xmlObject, $out = array()) {
+@@ -2142,7 +2166,8 @@
+                 CURLOPT_RETURNTRANSFER => true,
+                 CURLOPT_ENCODING => '',
+                 CURLOPT_MAXREDIRS => 10,
+-                CURLOPT_TIMEOUT => 0,
++                CURLOPT_CONNECTTIMEOUT => 5,
++                CURLOPT_TIMEOUT => 15,
+                 CURLOPT_FOLLOWLOCATION => true,
+                 CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+                 CURLOPT_CUSTOMREQUEST => 'GET',
+diff -ru a/modules/admin/controllers/SmppGatewaysController.php b/modules/admin/controllers/SmppGatewaysController.php
+--- a/modules/admin/controllers/SmppGatewaysController.php
++++ b/modules/admin/controllers/SmppGatewaysController.php
+@@ -314,6 +314,9 @@
+ 
+                 if (!empty($smsc->wait_ack_expire)) {
+                     fwrite($fp, "wait-ack-expire = $smsc->wait_ack_expire\n");
++                } else {
++                    //keep waiting for the vendor's ack; 0x01 re-queues and can send the same message again
++                    fwrite($fp, "wait-ack-expire = 0x02\n");
+                 }
+ 
+ 
+diff -ru a/modules/admin/views/smpp-gateways/_form.php b/modules/admin/views/smpp-gateways/_form.php
+--- a/modules/admin/views/smpp-gateways/_form.php
++++ b/modules/admin/views/smpp-gateways/_form.php
+@@ -123,7 +123,7 @@
+ 
+         <?= $form->field($model, 'wait_ack')->textInput(['maxlength' => true, 'placeholder' => 'Default is 60 seconds']) ?>
+ 
+-        <?= $form->field($model, 'wait_ack_expire')->textInput(['placeholder' => 'Default is 0x01'])->hint('Options are 0x00, 0x01 & 0x02') ?>
++        <?= $form->field($model, 'wait_ack_expire')->textInput(['placeholder' => 'Recommended 0x02'])->hint('0x02 keeps waiting for the vendor ack (recommended). 0x01 re-queues and can send duplicates. 0x00 reconnects.') ?>
+ 
+        
+     </div>
