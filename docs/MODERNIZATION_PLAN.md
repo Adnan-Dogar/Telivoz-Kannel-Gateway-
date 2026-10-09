@@ -21,7 +21,7 @@ The current gateway is about five years old. It runs Kannel (bearerbox, smsbox, 
 | Track | What | Duration (indicative) |
 |---|---|---|
 | **A. Stabilize now** | Targeted configuration, database and code fixes on the current system. They stop duplicates, lost DLRs and runaway resends while the new platform is built. | 1–2 weeks |
-| **B. New platform** | Replace Kannel and the PHP routing with one purpose-built engine in **Go**. Build a new **React + TypeScript** portal, use **PostgreSQL** for transactions, **ClickHouse** for Alaris-style analytics, **NATS JetStream** as the durable queue and **Redis** for caching and rate limits. Migrate clients and vendors gradually and keep the old system as a fallback. | ~5–6 months |
+| **B. New platform** | Replace Kannel and the PHP routing with one purpose-built engine in **Go**. Build a completely new, modern web portal in **React + TypeScript + Tailwind CSS**, plus an optional **React Native** mobile app (§5). Use **PostgreSQL** for transactions, **ClickHouse** for Alaris-style analytics, **NATS JetStream** as the durable queue and **Redis** for caching and rate limits. Migrate clients and vendors gradually and keep the old system as a fallback. | ~5–6 months |
 
 **Targets for the new platform:**
 
@@ -120,7 +120,8 @@ For every message, PHP does the following:
 |---|---|---|
 | Messaging engine | **Go** | Built for highly concurrent networking. Ships as a single static binary. Has an established SMPP ecosystem. 300 TPS uses a small fraction of the server's 40 threads. Easy to hire for. Rust was considered: it is faster, but slower to build, and the target doesn't need it. |
 | Portal and API backend | **Go** (same codebase) | One backend language. Shares models with the engine. Typed SQL (sqlc) and an OpenAPI spec. |
-| Frontend | **React + TypeScript**, Vite, Tailwind + shadcn/ui, TanStack Query/Table/Router, Apache ECharts | Modern and fast, with a consistent component library and rich charts for Alaris-style analytics. Dark mode, responsive layout, i18n. |
+| Web portal | **React + TypeScript + Tailwind CSS**, Vite, shadcn/ui, TanStack Query/Table/Router, Apache ECharts | A fully modern single-page app with a consistent component library and rich charts for Alaris-style analytics. Dark mode, responsive layout, i18n. Details in §5. |
+| Mobile app (optional) | **React Native + TypeScript** (Expo), NativeWind (Tailwind for React Native) | Native iOS and Android app with push alerts. Shares TypeScript types, API client, validation and design tokens with the web portal. Details in §5. |
 | Transactional database | **PostgreSQL** | Strong constraints and transactions for billing. Native partitioning for message tables. Exact `NUMERIC` money. |
 | Analytics database | **ClickHouse** | Sub-second aggregations over billions of CDRs. Materialized rollups for dashboards. |
 | Queue | **NATS JetStream** | Durable, with acknowledgement and redelivery, built-in de-duplication by message ID and a small operational footprint. RabbitMQ is an acceptable alternative. Kafka is overkill at this scale. |
@@ -135,7 +136,7 @@ flowchart LR
   subgraph Clients
     SC[SMPP clients]
     HC[HTTP API clients]
-    PU[Portal users]
+    PU[Portal and app users]
   end
   subgraph Engine["Messaging engine (Go)"]
     SS[SMPP server]
@@ -149,7 +150,7 @@ flowchart LR
   R[(Redis)]
   CH[(ClickHouse)]
   API[Portal API]
-  UI[React portal]
+  UI["Web portal (React)<br/>Mobile app (React Native)"]
   SC --> SS --> IN
   HC --> HA --> IN
   IN --> Q --> VC --> V[Vendors]
@@ -188,9 +189,106 @@ flowchart LR
 
 ---
 
-## 5. Features
+## 5. Modern GUI (web and mobile)
 
-### 5.1 Requested in the issues document
+The client wants a completely new interface built with current technology. The old portal (server-rendered Yii2 pages, Bootstrap 3 and jQuery widgets) will be **replaced, not reskinned**. Everything the user sees is rebuilt in **TypeScript**, styled with **Tailwind CSS** and built on **React**.
+
+### 5.1 Which technology goes where
+
+| Product | Technology | Used for |
+|---|---|---|
+| **Web portal** (admin and client) | **React + TypeScript + Tailwind CSS** | The main GUI, used in the browser on desktop, tablet and phone. Every admin and client feature lives here. |
+| **Mobile app** (optional, recommended) | **React Native + TypeScript + NativeWind** (Tailwind for React Native), built with Expo | A native iOS and Android app for people on the move: live traffic, alerts by push notification, balances and quick actions. |
+
+React Native builds native mobile apps, not websites. Using **React** for the web and **React Native** for mobile gives both the same language (TypeScript), the same styling approach (Tailwind classes), and shared code: API types, validation rules and design tokens.
+
+### 5.2 Frontend stack
+
+| Concern | Web portal | Mobile app |
+|---|---|---|
+| Language | TypeScript (strict mode) | TypeScript (strict mode) |
+| UI framework | React (current stable release, 19 or later), built with Vite | React Native with Expo and Expo Router |
+| Styling | Tailwind CSS (v4 or later) | NativeWind |
+| Components | shadcn/ui on Radix primitives: accessible, fully customizable, and owned in our codebase | shadcn-style components on NativeWind (e.g. React Native Reusables) |
+| Navigation | TanStack Router (type-safe routes) | Expo Router |
+| Server data and real-time | TanStack Query, with live updates over WebSocket | TanStack Query, plus push notifications |
+| Large tables | TanStack Table with virtual scrolling and server-side filtering, for millions of CDR rows | FlashList |
+| Charts | Apache ECharts: large data sets, zoom, drill-down | Native charts (e.g. Victory Native) |
+| Forms and validation | React Hook Form + Zod, with schemas shared with mobile | React Hook Form + Zod (shared schemas) |
+| Animation | Motion (formerly Framer Motion) | Reanimated |
+| Languages | i18next, carrying over the existing languages, RTL-ready | i18next (shared strings) |
+| API client | Generated from the backend's OpenAPI spec, so any API change is caught at compile time | The same generated package |
+| Testing | Vitest + Testing Library, Playwright end-to-end tests, Storybook for component review | Jest + React Native Testing Library, Maestro end-to-end tests |
+| Code quality | ESLint and Prettier (or Biome), strict TypeScript, all checked in CI | Same |
+
+### 5.3 Design approach
+
+- **Design system first.** A Figma design system defines the tokens (colors, typography, spacing, radius, shadows) in the client's brand, with light and dark themes. The tokens feed one shared Tailwind configuration used by both web and mobile, so the two always match.
+- **Design before code:**
+  1. UX discovery: what admins, NOC, sales, finance and clients each need.
+  2. Wireframes.
+  3. High-fidelity Figma screens and a clickable prototype.
+  4. Client sign-off.
+  5. Build.
+- **Look and feel:** a clean, modern SaaS dashboard style:
+  - A collapsible sidebar.
+  - A command palette (Ctrl/⌘ + K) to jump anywhere.
+  - Global search by number, message ID or client.
+  - Keyboard shortcuts.
+  - Toast notifications, skeleton loading states and helpful empty states.
+  - Inline editing.
+  - Saved filters and views for each user.
+- **Real-time:** live TPS charts, bind status indicators, queue depth and alerts update instantly, with no page refresh.
+- **Responsive:** every screen works on desktop, tablet and phone.
+- **Accessibility:** WCAG 2.2 AA (keyboard navigation, contrast, screen readers).
+- **Performance:** route-based code splitting and virtualized tables. Target a Lighthouse score of at least 90 for performance and accessibility.
+- **Modern sign-in:** 2FA with an authenticator app, optional passkeys, and session-timeout warnings.
+- **White-label ready (optional):** logo, colors and domain per reseller, since the system already supports reseller accounts.
+
+### 5.4 Key screens
+
+**Admin (web):**
+
+- Live operations dashboard: TPS in and out, DLR %, today's revenue and margin, top clients and vendors, active alerts.
+- Clients and accounts; vendors and connections, with live bind status and start, stop and restart per bind.
+- Rate deck import wizard: upload, map columns, preview the changes against current rates, apply with an effective date.
+- Visual routing rule builder: drag to reorder rules, plus a "test a number" simulator that shows which vendor and price would be chosen and why.
+- Content rules with a test sandbox.
+- Alaris-style analytics, and CDR search with a timeline for each message: received → routed → sent to vendor → DLR → forwarded.
+- Billing, ledger and invoices; users, roles and hierarchy; audit log; settings.
+
+**Client portal (web):**
+
+- Dashboard: traffic, delivery rate and spending.
+- Single send, and a bulk campaign wizard: upload → map columns → preview recipients and cost → schedule → live progress.
+- Reports and exports.
+- API keys with interactive API documentation.
+- Invoices, balance and top-up.
+
+**Mobile app:**
+
+- NOC view: live traffic, bind status, push alerts, and quick actions with confirmation.
+- Sales view: my clients' traffic, revenue and alerts.
+- Client view: balance, quick send and delivery statistics.
+
+### 5.5 Shared code (monorepo)
+
+Web and mobile live in one TypeScript monorepo, managed with pnpm workspaces and Turborepo. Features and fixes are written once wherever possible.
+
+```
+apps/web                 React + Vite web portal
+apps/mobile              React Native (Expo) mobile app
+packages/api-client      typed API client generated from OpenAPI
+packages/schemas         Zod validation shared by web and mobile
+packages/design-tokens   colors, typography, spacing → Tailwind and NativeWind
+packages/utils           money, date and phone-number formatting; i18n strings
+```
+
+---
+
+## 6. Features
+
+### 6.1 Requested in the issues document
 
 | Feature | In the new platform |
 |---|---|
@@ -203,9 +301,9 @@ flowchart LR
 | **Reporting (Alaris-style analytics)** | Dimensions: client, account, vendor, connection, country, network, sender ID, route and account manager. Measures: submitted, delivered, failed, pending, DLR %, revenue, cost, margin and submit→DLR latency. Hourly and daily time series, pivot tables, drill-down, period comparisons, saved and scheduled reports, CSV/XLSX export. Exact screens to be confirmed in a design review against the Alaris demo. |
 | **Hierarchy visibility** | An organization tree: Admin → Manager → Team Lead → Account Manager. Every client and vendor has an owner. Users see their own accounts plus their team's. This is enforced in the API and the analytics queries, not just hidden in the UI. |
 | **Box failures** | Replaced by engine health checks, a live connection status page with per-bind start, stop and restart, and alerts. |
-| **200–300 TPS** | Target: 300 sustained and at least 1,000 burst on the current hardware, proven by load tests (§8). |
+| **200–300 TPS** | Target: 300 sustained and at least 1,000 burst on the current hardware, proven by load tests (§9). |
 
-### 5.2 Additional recommended features
+### 6.2 Additional recommended features
 
 - **Live traffic dashboard**, updating in real time:
   - TPS in and out per client and vendor.
@@ -249,7 +347,7 @@ flowchart LR
   - Usage, invoices and exports.
   - Bulk campaigns.
 
-### 5.3 Legacy modules: keep or drop (client decision needed)
+### 6.3 Legacy modules: keep or drop (client decision needed)
 
 The PHP portal was built from a generic SMS-reseller template and contains many modules a wholesale A2P hub may not use:
 
@@ -270,7 +368,7 @@ The PHP portal was built from a generic SMS-reseller template and contains many 
 
 ---
 
-## 6. Data model principles
+## 7. Data model principles
 
 - **Money:** use `NUMERIC` (or integer micro-units) for every amount, and store the currency with it.
 - **IDs:** use `BIGINT` or UUIDv7.
@@ -295,35 +393,37 @@ The PHP portal was built from a generic SMS-reseller template and contains many 
 
 ---
 
-## 7. Roadmap
+## 8. Roadmap
 
-Durations are indicative for a team of 3–4 people: two Go backend developers, one frontend developer, and QA/DevOps part-time. They will be re-estimated after Phases 0 and 1.
+Durations are indicative for a team of 3–4 people: two Go backend developers, one React/TypeScript frontend developer, and QA/DevOps part-time. Add a UI/UX designer part-time for Phases 1–3, and one React Native developer if the mobile app is approved. They will be re-estimated after Phases 0 and 1.
 
 | Phase | Duration | Deliverables | Exit criteria |
 |---|---|---|---|
 | **0. Discovery and stabilization** (Track A) | 1–2 weeks | Collect the live configs and missing components. Baseline metrics: TPS, DLR latency, duplicates per day, queue depth. Rotate credentials and move secrets out of code. Apply the "Stabilize now" fixes from §3, each tested on a staging copy and rolled out separately with rollback steps. | Duplicates, lost DLRs and runaway resends stop in production for one week. Baseline report delivered. |
-| **1. Foundation** | ~3 weeks | Monorepo, CI/CD, and a Docker Compose stack (PostgreSQL, Redis, NATS, ClickHouse, Prometheus/Grafana). New schema and migrations. ETL from the legacy database with reconciliation reports. SMPP library spike and benchmark. SMPP client and vendor simulators. Authentication, RBAC and hierarchy model. API skeleton with OpenAPI. UI shell (login, layout, theming). | Staging is up, and legacy master data imports and reconciles cleanly. |
+| **1. Foundation** | ~3 weeks | Monorepo, CI/CD, and a Docker Compose stack (PostgreSQL, Redis, NATS, ClickHouse, Prometheus/Grafana). New schema and migrations. ETL from the legacy database with reconciliation reports. SMPP library spike and benchmark. SMPP client and vendor simulators. Authentication, RBAC and hierarchy model. API skeleton with OpenAPI. **Design:** UX discovery, wireframes, a Figma design system and the key screens. Frontend monorepo set up (§5.5), with the UI shell: login, layout, light and dark themes. | Staging is up, and legacy master data imports and reconciles cleanly. Client signs off the design system and key screens. |
 | **2. Messaging engine** | 6–8 weeks | **SMPP server:** bind modes, authentication, IP allowlists, TPS limits, windowing, concatenated messages, encodings. **Vendor connectors:** SMPP multi-bind and generic HTTP, with retry policy and throttling. **Routing engine:** static, weighted, LCR, quality and failover policies, sender-ID and content rules, plus a route simulator. **Billing:** ledger with reserve, commit and refund, prepaid and postpaid. **DLRs and MO:** DLR correlation and forwarding, MO handling. **Data:** CDR pipeline to ClickHouse, metrics. | Load tests on staging: 300 TPS for 1 hour and a 1,000 TPS burst. Chaos tests show zero lost or duplicated messages and charges. |
-| **3. Portal and client API** (parallel with 2) | 6–8 weeks | **Admin:** clients, accounts, vendors, connections with live status and per-bind controls, rate decks, routing rule builder, content rules, sender IDs, numbering plan, users, roles and hierarchy, audit log, alerts. **Client portal:** dashboard, send SMS, bulk campaigns, reports, API keys, invoices. HTTP API v1 with webhooks and documentation. | Client signs off UAT on the agreed screens. |
+| **3. Web portal and client API** (parallel with 2) | 6–8 weeks | Built in React + TypeScript + Tailwind CSS from the approved designs (§5). **Admin:** clients, accounts, vendors, connections with live status and per-bind controls, rate decks, routing rule builder, content rules, sender IDs, numbering plan, users, roles and hierarchy, audit log, alerts. **Client portal:** dashboard, send SMS, bulk campaigns, reports, API keys, invoices. HTTP API v1 with webhooks and documentation. | Client signs off UAT on the agreed screens. |
+| **3b. Mobile app** (optional, parallel with 4–5) | 4–6 weeks | React Native (Expo) app for iOS and Android, reusing the shared packages: NOC, sales and client views, push alerts, and App Store and Google Play publishing. | Published to the stores (or distributed internally). Client signs off. |
 | **4. Analytics and reporting** (overlaps 3) | 3–4 weeks | ClickHouse rollups. Analytics UI: dashboards, pivot tables, drill-down, exports, scheduled reports, with hierarchy scoping. Historical import from the legacy database. | Reports match legacy figures for a reconciled period. |
 | **5. Migration and cutover** | 3–4 weeks | **Parallel run:** the route simulator compares new and legacy routing decisions on real traffic samples. **Pilot:** internal test accounts first, then a few low-volume clients, then the rest in groups. Vendors move one connection at a time. **Per-client cutover:** freeze the balance, transfer it, switch the SMPP endpoint (same IP and port where possible, so clients don't reconfigure). Legacy stays warm for rollback. | All traffic is on the new platform, and reconciliation is clean for 2 weeks. |
 | **6. Decommission and hand-over** | ~1 week | Archive the legacy database and remove Kannel. Runbooks, plus training for NOC, sales and finance. | Legacy shut down and documentation handed over. |
 
-**Total elapsed time:** about 5–6 months. Phases 2–4 overlap.
+**Total elapsed time:** about 5–6 months. Phases 2–4 overlap. The optional mobile app runs in parallel and does not extend the timeline if a dedicated developer is added.
 
 ---
 
-## 8. Quality, operations and security
+## 9. Quality, operations and security
 
-### 8.1 Testing
+### 9.1 Testing
 
 - **Unit tests:** routing, pricing, encoding and segmentation, billing.
 - **Integration tests:** against SMPP client and vendor simulators.
 - **Load tests:** an SMPP load generator and HTTP load tests at the target rates, measuring p50/p95/p99 latency.
 - **Chaos tests:** kill the engine, database or queue in the middle of traffic, then verify the counts. No lost, duplicated or double-charged messages.
 - **Daily reconciliation job:** ledger vs CDRs vs vendor totals.
+- **Frontend:** component tests, Playwright end-to-end tests of the key web flows, Maestro tests for the mobile app, and visual review of components in Storybook.
 
-### 8.2 Acceptance criteria tied to the reported issues
+### 9.2 Acceptance criteria tied to the reported issues
 
 | Reported issue | Acceptance test |
 |---|---|
@@ -334,14 +434,14 @@ Durations are indicative for a team of 3–4 people: two Go backend developers, 
 | Box failures | Every failure produces logs and an alert. Configuration changes cause no restarts. |
 | TPS | 300 TPS sustained for 1 hour and a 1,000 TPS burst on the target server. |
 
-### 8.3 Operations
+### 9.3 Operations
 
 - **Dashboards and alerts:** Grafana dashboards for traffic, vendors, DLRs and system health. Alerts for binds down, queue growth, DLR-rate drops, low balances and errors.
 - **Tracing:** structured logs that carry the message ID, so any message can be traced end to end.
 - **Backups:** PostgreSQL point-in-time recovery (WAL archiving), ClickHouse backups and configuration backups, with restore tested regularly.
 - **High availability:** the current single server is a single point of failure. A second server is recommended, for a PostgreSQL replica and a standby engine (optional phase).
 
-### 8.4 Security
+### 9.4 Security
 
 - **Secrets:** kept in environment variables or a secret store, never in the repository. All existing credentials are rotated.
 - **Credentials at rest:** API keys and passwords are hashed with argon2 or bcrypt.
@@ -353,7 +453,7 @@ Durations are indicative for a team of 3–4 people: two Go backend developers, 
 
 ---
 
-## 9. Inputs needed from the client
+## 10. Inputs needed from the client
 
 1. Live Kannel configs: `kannel.conf`, opensmppbox, sqlbox, SMSC include files and `smsbox-route.conf`. Also the systemd units and crontab.
 2. Source code for `MessageDispatcherL` and for whatever writes `delivery_reports`.
@@ -368,7 +468,7 @@ Durations are indicative for a team of 3–4 people: two Go backend developers, 
    - Refunds on failure?
    - Which currencies?
 6. Failover rules: which vendor error codes allow a retry on another vendor?
-7. Which legacy modules (§5.3) are in use.
+7. Which legacy modules (§6.3) are in use.
 8. The Alaris analytics screens to replicate, with screenshots of the priority views.
 9. Hierarchy roles and who should see what, including finance and NOC.
 10. Hosting:
@@ -377,10 +477,19 @@ Durations are indicative for a team of 3–4 people: two Go backend developers, 
     - Is a staging server available?
 11. Compatibility: must the SMPP IP/port and the HTTP API format stay exactly the same for existing clients?
 12. Team, budget and timeline constraints.
+13. Branding and design:
+    - Logo, colors and fonts.
+    - Example apps or dashboards they like the look of.
+    - Light theme, dark theme, or both?
+14. Mobile app:
+    - Wanted now or later?
+    - iOS, Android, or both?
+    - Who uses it: NOC, sales, clients?
+    - Whose App Store and Google Play developer accounts will publish it?
 
 ---
 
-## 10. Risks
+## 11. Risks
 
 | Risk | Mitigation |
 |---|---|
@@ -390,14 +499,16 @@ Durations are indicative for a team of 3–4 people: two Go backend developers, 
 | Billing discrepancies | Ledger constraints, daily reconciliation, and a parallel-run comparison. |
 | Single server failure | Backups from Phase 0. A second server is recommended. |
 | Missing knowledge (components not in the source) | Phase 0 discovery, with everything documented in runbooks. |
+| UI scope creep or design rework | Figma sign-off before building. A prioritized screen list. A shared component library, so changes are made once. |
 
 ---
 
-## 11. Proposed repository layout
+## 12. Proposed repository layout
 
 ```
 engine/   Go: cmd/engine, cmd/api, cmd/worker; internal/{smpp,routing,billing,dlr,...}
-web/      React + TypeScript portal
+apps/     TypeScript: web (React + Tailwind) and mobile (React Native + NativeWind)
+packages/ shared TypeScript: api-client, schemas, design-tokens, utils
 db/       PostgreSQL migrations, ClickHouse DDL
 deploy/   Docker Compose, configs, Grafana dashboards, alert rules
 tools/    legacy ETL, load testing, SMPP simulators
@@ -408,8 +519,8 @@ The legacy code and database dumps are kept out of this public repository.
 
 ---
 
-## 12. Next steps
+## 13. Next steps
 
-1. Review this plan and answer the questions in §9.
+1. Review this plan and answer the questions in §10.
 2. Approve the Track A fixes. Each will be prepared as a small, reviewable change with rollback steps.
 3. Start Phase 1 (foundation) once Phase 0 discovery is complete.
