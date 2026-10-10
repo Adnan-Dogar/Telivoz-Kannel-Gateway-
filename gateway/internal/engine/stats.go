@@ -35,7 +35,7 @@ type Stats struct {
 	pending map[statKey]*statRow
 	// per-second ring buffers, indexed by unix second % liveWindow
 	secIn, secOut, secDLR [liveWindow]int64
-	secStamp             [liveWindow]int64
+	secStamp              [liveWindow]int64
 }
 
 func newStats() *Stats { return &Stats{pending: map[statKey]*statRow{}} }

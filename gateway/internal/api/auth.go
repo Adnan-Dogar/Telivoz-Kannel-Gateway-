@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"strings"
@@ -43,6 +44,8 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
+		Code     string `json:"code"`
+		Token    bool   `json:"token"` // mobile app: return the session token instead of relying on the cookie
 	}
 	if err := readJSON(r, &in); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid", "invalid request")
@@ -55,12 +58,26 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var id int64
-	var hash, status string
-	err := s.db.QueryRow(r.Context(), `SELECT id, password_hash, status FROM users WHERE lower(email) = $1`, in.Email).Scan(&id, &hash, &status)
+	var hash, status, totpEnc string
+	var totpOn bool
+	err := s.db.QueryRow(r.Context(), `SELECT id, password_hash, status, totp_secret_enc, totp_enabled FROM users WHERE lower(email) = $1`,
+		in.Email).Scan(&id, &hash, &status, &totpEnc, &totpOn)
 	if err != nil || status != "active" || !auth.CheckPassword(hash, in.Password) {
 		s.recordFailure(key)
 		writeError(w, http.StatusUnauthorized, "invalid_login", "wrong email or password")
 		return
+	}
+	if totpOn {
+		if strings.TrimSpace(in.Code) == "" {
+			writeError(w, http.StatusUnauthorized, "totp_required", "enter the 6-digit code from your authenticator app")
+			return
+		}
+		secret, derr := s.cipher.Decrypt(totpEnc)
+		if derr != nil || !auth.VerifyTOTP(secret, in.Code, time.Now()) {
+			s.recordFailure(key)
+			writeError(w, http.StatusUnauthorized, "invalid_code", "wrong or expired code")
+			return
+		}
 	}
 	token, tokenHash := auth.NewToken()
 	if _, err := s.db.Exec(r.Context(), `INSERT INTO sessions (token_hash, user_id, expires_at, ip) VALUES ($1, $2, $3, $4)`,
@@ -73,12 +90,21 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteStrictMode, Expires: time.Now().Add(s.opts.SessionTTL)})
 	r = r.WithContext(context.WithValue(r.Context(), principalKey, &auth.Principal{UserID: id}))
 	s.audit(r, "login", "user", "", map[string]string{"ip": clientIP(r)})
+	if in.Token {
+		var me json.RawMessage
+		if err := s.db.QueryRow(r.Context(), meSQL, id).Scan(&me); err != nil {
+			s.dbError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"token": token, "user": me})
+		return
+	}
 	s.writeMe(w, r, id)
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(sessionCookie); err == nil {
-		_, _ = s.db.Exec(r.Context(), `DELETE FROM sessions WHERE token_hash = $1`, auth.HashToken(c.Value))
+	if token := sessionToken(r); token != "" {
+		_, _ = s.db.Exec(r.Context(), `DELETE FROM sessions WHERE token_hash = $1`, auth.HashToken(token))
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true})
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -88,11 +114,13 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	s.writeMe(w, r, principal(r).UserID)
 }
 
+const meSQL = `SELECT jsonb_build_object('id', u.id, 'email', u.email, 'name', u.name, 'role', u.role,
+		'client_id', u.client_id, 'client_name', c.name, 'totp_enabled', u.totp_enabled)
+	FROM users u LEFT JOIN clients c ON c.id = u.client_id WHERE u.id = $1`
+
 func (s *Server) writeMe(w http.ResponseWriter, r *http.Request, id int64) {
 	var raw []byte
-	err := s.db.QueryRow(r.Context(), `SELECT jsonb_build_object('id', u.id, 'email', u.email, 'name', u.name, 'role', u.role,
-			'client_id', u.client_id, 'client_name', c.name)
-		FROM users u LEFT JOIN clients c ON c.id = u.client_id WHERE u.id = $1`, id).Scan(&raw)
+	err := s.db.QueryRow(r.Context(), meSQL, id).Scan(&raw)
 	if err != nil {
 		s.dbError(w, err)
 		return
@@ -146,17 +174,19 @@ type scope struct {
 	clientIDs  []int64
 	allVendors bool
 	vendorIDs  []int64
+	allUsers   bool
+	userIDs    []int64
 }
 
 func (s *Server) scopeFor(ctx context.Context, p *auth.Principal) scope {
 	switch {
 	case p.CanSeeAll():
-		return scope{allClients: true, allVendors: true}
+		return scope{allClients: true, allVendors: true, allUsers: true}
 	case p.IsClient():
-		return scope{clientIDs: []int64{p.ClientID}, vendorIDs: []int64{}}
+		return scope{clientIDs: []int64{p.ClientID}, vendorIDs: []int64{}, userIDs: []int64{p.UserID}}
 	default:
 		team := s.teamIDs(ctx, p.UserID)
-		sc := scope{clientIDs: []int64{}, vendorIDs: []int64{}}
+		sc := scope{clientIDs: []int64{}, vendorIDs: []int64{}, userIDs: team}
 		_ = s.db.QueryRow(ctx, `SELECT COALESCE(array_agg(id), '{}') FROM clients WHERE owner_id = ANY($1)`, team).Scan(&sc.clientIDs)
 		_ = s.db.QueryRow(ctx, `SELECT COALESCE(array_agg(id), '{}') FROM vendors WHERE owner_id = ANY($1)`, team).Scan(&sc.vendorIDs)
 		return sc

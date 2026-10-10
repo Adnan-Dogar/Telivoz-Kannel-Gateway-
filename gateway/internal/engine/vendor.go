@@ -40,6 +40,8 @@ type connConfig struct {
 	DLRIDFormat string
 	MaxAttempts int
 	Enabled     bool
+	// DLR statuses ("UNDELIV") or "STAT:ERR" pairs that trigger a resend through the next vendor.
+	FailoverOnDLR []string
 }
 
 func (c connConfig) bindKey() string {
@@ -92,7 +94,7 @@ type vendorConn struct {
 func (e *Engine) syncVendors(ctx context.Context) error {
 	rows, err := e.db.Query(ctx, `SELECT c.id, c.vendor_id, c.name, c.host, c.port, c.system_id, c.password_enc, c.system_type,
 			c.bind_mode, c.binds, c.tps, c.window_size, c.source_ton, c.source_npi, c.dest_ton, c.dest_npi, c.dlr_id_format,
-			c.max_attempts, c.status = 'enabled' AND v.status = 'active'
+			c.max_attempts, c.status = 'enabled' AND v.status = 'active', c.failover_on_dlr
 		FROM connections c JOIN vendors v ON v.id = c.vendor_id`)
 	if err != nil {
 		return err
@@ -103,7 +105,7 @@ func (e *Engine) syncVendors(ctx context.Context) error {
 		var enc string
 		var st, sn, dt, dn int16
 		if err := rows.Scan(&c.ID, &c.VendorID, &c.Name, &c.Host, &c.Port, &c.SystemID, &enc, &c.SystemType, &c.BindMode,
-			&c.Binds, &c.TPS, &c.Window, &st, &sn, &dt, &dn, &c.DLRIDFormat, &c.MaxAttempts, &c.Enabled); err != nil {
+			&c.Binds, &c.TPS, &c.Window, &st, &sn, &dt, &dn, &c.DLRIDFormat, &c.MaxAttempts, &c.Enabled, &c.FailoverOnDLR); err != nil {
 			rows.Close()
 			return err
 		}
@@ -308,24 +310,24 @@ func (v *vendorConn) transmitter() *smpp.Session {
 }
 
 type queuedMessage struct {
-	queueID    int64
-	id         uuid.UUID
-	createdAt  time.Time
-	clientID   int64
-	accountID  int64
-	source     string
-	dest       string
-	body       string
-	coding     byte
-	payload    []byte
-	udh        []byte
-	wantsDLR   bool
-	parts      int
-	country    string
-	networkID  int64
-	attempts   int
-	plan       []int64
-	price      routing.Micros
+	queueID   int64
+	id        uuid.UUID
+	createdAt time.Time
+	clientID  int64
+	accountID int64
+	source    string
+	dest      string
+	body      string
+	coding    byte
+	payload   []byte
+	udh       []byte
+	wantsDLR  bool
+	parts     int
+	country   string
+	networkID int64
+	attempts  int
+	plan      []int64
+	price     routing.Micros
 }
 
 // sendLoop claims queued messages for this connection and submits them within the TPS limit.
@@ -518,7 +520,7 @@ func (v *vendorConn) finishSent(m queuedMessage, vendorIDs []string, note string
 			}
 		}
 		if _, err := tx.Exec(context.Background(), `UPDATE messages SET status = 'sent', sent_at = now(), connection_id = $3,
-				attempts = attempts + 1, cost = $4::numeric, error = $5
+				attempts = attempts + 1, cost = cost + $4::numeric, error = $5
 			WHERE id = $1 AND created_at = $2`, m.id, m.createdAt, v.cfg.ID, cost.String(), note); err != nil {
 			return err
 		}

@@ -295,3 +295,93 @@ func TestDLRSurvivesGatewayRestart(t *testing.T) {
 	c2 := h2.client()
 	waitFor(t, "DLR delivered after restart", 15*time.Second, func() bool { return c2.DLRFor(id) == "DELIVRD" })
 }
+
+func TestBlacklistRejects(t *testing.T) {
+	pool := tu.DB(t)
+	f := tu.Seed(t, pool)
+	v := &sim.Vendor{Mode: sim.VendorOK}
+	c1 := tu.Connection(t, pool, f.VendorID, "v", vendor(t, v), "0.002")
+	tu.Route(t, pool, "priority", c1)
+	tu.Exec(t, pool, `INSERT INTO blacklist (client_id, number) VALUES (NULL, '923001110000'), ($1, '923001110001')`, f.ClientID)
+	h := start(t, pool, f, "")
+	c := h.client()
+	ctx := context.Background()
+	for _, n := range []string{"923001110000", "+92 300 1110001"} {
+		if _, err := c.Send(ctx, "Acme", n, "x"); err == nil {
+			t.Fatalf("%s is blacklisted but was accepted", n)
+		}
+	}
+	if _, err := c.Send(ctx, "Acme", "923001110002", "x"); err != nil {
+		t.Fatalf("non-blacklisted number rejected: %v", err)
+	}
+	if got := h.num(`SELECT count(*) FROM messages`); got != 1 {
+		t.Fatalf("%v messages stored, want 1", got)
+	}
+}
+
+func TestFailoverAfterNegativeDLR(t *testing.T) {
+	pool := tu.DB(t)
+	f := tu.Seed(t, pool)
+	bad := &sim.Vendor{Mode: sim.VendorOK, FailRatio: 1} // accepts, then reports UNDELIV
+	good := &sim.Vendor{Mode: sim.VendorOK}
+	c1 := tu.Connection(t, pool, f.VendorID, "undeliv", vendor(t, bad), "0.002")
+	c2 := tu.Connection(t, pool, f.VendorID, "good", vendor(t, good), "0.004")
+	tu.Exec(t, pool, `UPDATE connections SET failover_on_dlr = '{UNDELIV}' WHERE id = $1`, c1)
+	tu.Route(t, pool, "priority", c1, c2)
+	h := start(t, pool, f, "")
+	waitBound(t, h.eng, c1)
+	waitBound(t, h.eng, c2)
+	c := h.client()
+	id, err := c.Send(context.Background(), "Acme", "923002220000", "retry me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "final DLR after DLR failover", 10*time.Second, func() bool { return c.DLRFor(id) == "DELIVRD" })
+	if bad.CountFor("923002220000") != 1 || good.CountFor("923002220000") != 1 {
+		t.Fatalf("vendor submits: bad %d, good %d; want 1 and 1", bad.CountFor("923002220000"), good.CountFor("923002220000"))
+	}
+	if got := h.num(`SELECT count(*) FROM ledger WHERE kind = 'charge'`); got != 1 {
+		t.Fatalf("%v charges, want 1", got)
+	}
+	if got := h.num(`SELECT cost FROM messages`); got != 0.006 {
+		t.Fatalf("cost %v, want both vendors' cost 0.006", got)
+	}
+}
+
+func TestMOForwardingAndOptOut(t *testing.T) {
+	pool := tu.DB(t)
+	f := tu.Seed(t, pool)
+	v := &sim.Vendor{Mode: sim.VendorOK}
+	c1 := tu.Connection(t, pool, f.VendorID, "v", vendor(t, v), "0.002")
+	tu.Route(t, pool, "priority", c1)
+	tu.Exec(t, pool, `INSERT INTO mo_routes (name, number_prefix, client_id, account_id) VALUES ('short code', '8899', $1, $2)`, f.ClientID, f.AccountID)
+	h := start(t, pool, f, "")
+	waitBound(t, h.eng, c1)
+	c := h.client()
+	ctx := context.Background()
+	if err := v.SendMO(ctx, "923003330000", "8899", "Hello there"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "MO at client", 5*time.Second, func() bool { return len(c.MOs()) == 1 })
+	if got := c.MOs()[0]; got != "923003330000|8899|Hello there" {
+		t.Fatalf("MO content: %q", got)
+	}
+	// STOP adds the sender to the client's blacklist; sending to them is then rejected.
+	if err := v.SendMO(ctx, "923003330000", "8899", "STOP"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "opt-out applied", 8*time.Second, func() bool {
+		_, err := c.Send(ctx, "Acme", "923003330000", "promo")
+		return err != nil
+	})
+	if got := h.num(`SELECT count(*) FROM blacklist WHERE client_id = $1 AND number = '923003330000'`, f.ClientID); got != 1 {
+		t.Fatalf("blacklist rows %v", got)
+	}
+	// An MO for a number without a route is stored but not forwarded.
+	if err := v.SendMO(ctx, "923003330001", "7777", "lost"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "unrouted MO stored", 3*time.Second, func() bool {
+		return h.num(`SELECT count(*) FROM messages WHERE direction = 'mo' AND status = 'unrouted'`) == 1
+	})
+}

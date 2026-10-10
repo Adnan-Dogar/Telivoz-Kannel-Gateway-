@@ -98,6 +98,7 @@ export function ConnectionsPage() {
         { name: "dest_ton", label: "Destination TON", type: "number", default: 1, span: 1 },
         { name: "dest_npi", label: "Destination NPI", type: "number", default: 1, span: 1 },
         { name: "dlr_id_format", label: "DLR message ID format", type: "select", default: "auto", options: [{ value: "auto", label: "Auto-detect (hex/decimal)" }, { value: "same", label: "Same as submit response" }] },
+        { name: "failover_on_dlr", label: "Resend via the next vendor on these DLRs", type: "tags", placeholder: "UNDELIV, REJECTD:001", hint: "DLR statuses, or STATUS:error-code pairs. The client is charged once and only sees the final DLR." },
       ]}
     />
   );

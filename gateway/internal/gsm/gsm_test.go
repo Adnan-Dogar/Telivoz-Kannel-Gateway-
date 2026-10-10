@@ -30,9 +30,9 @@ func TestUnicodeDetectedAndRoundTrips(t *testing.T) {
 
 func TestSplitLimits(t *testing.T) {
 	cases := []struct {
-		text  string
+		text   string
 		coding byte
-		parts int
+		parts  int
 	}{
 		{strings.Repeat("a", 160), CodingDefault, 1},
 		{strings.Repeat("a", 161), CodingDefault, 2},

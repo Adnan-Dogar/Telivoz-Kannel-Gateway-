@@ -1,6 +1,9 @@
 package auth
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestPasswordAndLegacyHash(t *testing.T) {
 	h, err := HashPassword("s3cret")
@@ -37,5 +40,20 @@ func TestAPIKey(t *testing.T) {
 	key, prefix, hash := NewAPIKey()
 	if len(key) < 40 || prefix != key[:12] || !EqualHash(hash, HashToken(key)) {
 		t.Fatal("api key mismatch")
+	}
+}
+
+func TestTOTPRFC6238Vector(t *testing.T) {
+	// RFC 6238 test secret "12345678901234567890" (base32 GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ) at T=59s -> 287082 (6 digits).
+	secret := "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+	code, err := TOTPCode(secret, time.Unix(59, 0))
+	if err != nil || code != "287082" {
+		t.Fatalf("got %q %v", code, err)
+	}
+	if !VerifyTOTP(secret, "287082", time.Unix(80, 0)) || VerifyTOTP(secret, "287082", time.Unix(200, 0)) {
+		t.Fatal("drift window wrong")
+	}
+	if len(NewTOTPSecret()) != 32 {
+		t.Fatal("secret length")
 	}
 }

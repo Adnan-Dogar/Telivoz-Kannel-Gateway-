@@ -26,18 +26,18 @@ const (
 
 // Vendor is a fake SMSC.
 type Vendor struct {
-	Mode         VendorMode
-	FailRatio    float64       // share of accepted messages that get an UNDELIV DLR
-	DLRDelay     time.Duration // delay before the DLR
-	ThrottleN    int64
-	HexIDs       bool // answer submit_sm_resp with hex ids but send DLR ids in decimal (a common vendor quirk)
-	ln           net.Listener
-	nextID       atomic.Int64
-	Received     atomic.Int64
-	throttled    atomic.Int64
-	mu           sync.Mutex
-	perDest      map[string]int
-	sessions     []*smpp.Session
+	Mode      VendorMode
+	FailRatio float64       // share of accepted messages that get an UNDELIV DLR
+	DLRDelay  time.Duration // delay before the DLR
+	ThrottleN int64
+	HexIDs    bool // answer submit_sm_resp with hex ids but send DLR ids in decimal (a common vendor quirk)
+	ln        net.Listener
+	nextID    atomic.Int64
+	Received  atomic.Int64
+	throttled atomic.Int64
+	mu        sync.Mutex
+	perDest   map[string]int
+	sessions  []*smpp.Session
 }
 
 // Start listens on a random local port (or addr) and returns the address.
@@ -145,12 +145,25 @@ func (v *Vendor) handle(s *smpp.Session, p *smpp.PDU) {
 	}
 }
 
+// SendMO delivers an incoming (subscriber) message to the gateway over any bound session.
+func (v *Vendor) SendMO(ctx context.Context, from, to, text string) error {
+	s := v.liveSession(nil)
+	if s == nil {
+		return fmt.Errorf("no bound session")
+	}
+	_, err := s.Request(ctx, smpp.DeliverSm, &smpp.Sm{SourceTon: 1, SourceNpi: 1, Source: from, DestTon: 1, DestNpi: 1,
+		Destination: to, ShortMessage: []byte(text)})
+	return err
+}
+
 // liveSession returns preferred if it is still open, otherwise any open session that can receive.
 func (v *Vendor) liveSession(preferred *smpp.Session) *smpp.Session {
-	select {
-	case <-preferred.Done():
-	default:
-		return preferred
+	if preferred != nil {
+		select {
+		case <-preferred.Done():
+		default:
+			return preferred
+		}
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -178,6 +191,14 @@ type Client struct {
 	mu        sync.Mutex
 	statuses  map[uint32]int
 	dlrIDs    map[string]string
+	mos       []string
+}
+
+// MOs returns the incoming messages received as "from|to|text".
+func (c *Client) MOs() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.mos...)
 }
 
 // DialClient binds as a transceiver.
@@ -198,7 +219,14 @@ func (c *Client) handle(s *smpp.Session, p *smpp.PDU) {
 		return
 	}
 	_ = s.Respond(p, smpp.StatusOK, &smpp.MessageIDResp{})
-	if r, ok := smpp.ParseReceipt(p.Body.(*smpp.Sm)); ok {
+	sm := p.Body.(*smpp.Sm)
+	if sm.EsmClass&smpp.EsmDeliveryReceipt == 0 {
+		c.mu.Lock()
+		c.mos = append(c.mos, sm.Source+"|"+sm.Destination+"|"+string(sm.ShortMessage))
+		c.mu.Unlock()
+		return
+	}
+	if r, ok := smpp.ParseReceipt(sm); ok {
 		c.mu.Lock()
 		c.dlrIDs[r.ID] = r.Stat
 		c.mu.Unlock()

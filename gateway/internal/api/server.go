@@ -81,6 +81,12 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/auth/logout", s.logout)
 			r.Get("/auth/me", s.me)
 			r.Post("/auth/password", s.changePassword)
+			r.Post("/auth/2fa/setup", s.totpSetup)
+			r.Post("/auth/2fa/enable", s.totpEnable)
+			r.Post("/auth/2fa/disable", s.totpDisable)
+			r.Post("/users/{id}/reset-2fa", s.totpReset)
+			r.Post("/blacklist/import", s.importBlacklist)
+			r.Get("/clients/{id}/statement", s.statement)
 
 			r.Get("/stats/live", s.statsLive)
 			r.Get("/stats/overview", s.statsOverview)
@@ -234,16 +240,16 @@ func principal(r *http.Request) *auth.Principal {
 
 func (s *Server) requireSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie(sessionCookie)
-		if err != nil || c.Value == "" {
+		token := sessionToken(r)
+		if token == "" {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "please sign in")
 			return
 		}
 		p := &auth.Principal{}
 		var clientID *int64
-		err = s.db.QueryRow(r.Context(), `SELECT u.id, u.email, u.name, u.role, u.client_id
+		err := s.db.QueryRow(r.Context(), `SELECT u.id, u.email, u.name, u.role, u.client_id
 			FROM sessions s JOIN users u ON u.id = s.user_id
-			WHERE s.token_hash = $1 AND s.expires_at > now() AND u.status = 'active'`, auth.HashToken(c.Value)).
+			WHERE s.token_hash = $1 AND s.expires_at > now() AND u.status = 'active'`, auth.HashToken(token)).
 			Scan(&p.UserID, &p.Email, &p.Name, &p.Role, &clientID)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "session expired, please sign in again")
@@ -254,6 +260,17 @@ func (s *Server) requireSession(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey, p)))
 	})
+}
+
+// sessionToken reads the session from the portal cookie or, for the mobile app, an "Authorization: Bearer" header.
+func sessionToken(r *http.Request) string {
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+		return strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
+	}
+	if c, err := r.Cookie(sessionCookie); err == nil {
+		return c.Value
+	}
+	return ""
 }
 
 // csrf: state-changing portal requests must carry a custom header, which browsers never add cross-site.

@@ -59,6 +59,7 @@ var (
 	ErrNoRouteFound = &SubmitError{"no_route", smpp.StatusRejectAppErr, "no route available for this destination"}
 	ErrNoBalance    = &SubmitError{"insufficient_balance", smpp.StatusRejectAppErr, "insufficient balance"}
 	ErrEmptyMessage = &SubmitError{"empty_message", smpp.StatusInvMsgLen, "message text is empty"}
+	ErrBlacklisted  = &SubmitError{"blacklisted", smpp.StatusRejectAppErr, "destination number is blacklisted"}
 	ErrInternal     = &SubmitError{"internal_error", smpp.StatusSysErr, "internal error, please retry"}
 )
 
@@ -87,6 +88,9 @@ func (e *Engine) Submit(ctx context.Context, req SubmitRequest) (SubmitResult, e
 	}
 	if req.Text == "" && len(req.Payload) == 0 {
 		return reject(ErrEmptyMessage)
+	}
+	if snap.Blacklisted(req.Account.ClientID, dest.Number) {
+		return reject(ErrBlacklisted)
 	}
 
 	content, _, err := snap.ApplyContent(req.Account.ClientID, dest.CountryISO, routing.Content{Sender: req.Source, Text: req.Text})

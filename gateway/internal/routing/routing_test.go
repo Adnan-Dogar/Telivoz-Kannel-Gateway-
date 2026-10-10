@@ -163,3 +163,39 @@ func TestContentRules(t *testing.T) {
 		t.Fatal("expected block")
 	}
 }
+
+func TestBlacklistGlobalAndPerClient(t *testing.T) {
+	b := NewBuilder()
+	b.Blacklist(0, "+92 300 0000001")
+	b.Blacklist(7, "923000000002")
+	s := b.Build()
+	if !s.Blacklisted(7, "923000000001") || !s.Blacklisted(9, "923000000001") {
+		t.Fatal("global entry must block every client")
+	}
+	if !s.Blacklisted(7, "923000000002") || s.Blacklisted(9, "923000000002") {
+		t.Fatal("client entry must block only that client")
+	}
+}
+
+func TestMatchMO(t *testing.T) {
+	b := NewBuilder()
+	b.MORoute(MORoute{ID: 1, Name: "any on 8899", NumberPrefix: "8899", ClientID: 1})
+	b.MORoute(MORoute{ID: 2, Name: "PROMO on 8899", NumberPrefix: "8899", Keyword: "promo", ClientID: 2})
+	b.MORoute(MORoute{ID: 3, Name: "long number", NumberPrefix: "92300555", ClientID: 3})
+	s := b.Build()
+	if r := s.MatchMO("8899", "promo please"); r == nil || r.ID != 2 {
+		t.Fatalf("keyword route expected, got %+v", r)
+	}
+	if r := s.MatchMO("8899", "hello"); r == nil || r.ID != 1 {
+		t.Fatalf("number route expected, got %+v", r)
+	}
+	if r := s.MatchMO("+92300555123", "hi"); r == nil || r.ID != 3 {
+		t.Fatalf("long number route expected, got %+v", r)
+	}
+	if r := s.MatchMO("1234", "hi"); r != nil {
+		t.Fatalf("no route expected, got %+v", r)
+	}
+	if FirstWord("  Stop. ") != "STOP" {
+		t.Fatal("first word")
+	}
+}

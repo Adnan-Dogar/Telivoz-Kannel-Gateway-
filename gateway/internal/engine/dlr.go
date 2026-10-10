@@ -109,13 +109,7 @@ func (v *vendorConn) handleIncoming(s *smpp.Session, p *smpp.PDU) {
 		return
 	}
 	text, _ := gsm.Decode(sm.DataCoding, sm.Payload(), sm.EsmClass&smpp.EsmUDHI != 0)
-	id, _ := uuid.NewV7()
-	_, err := v.e.db.Exec(ctx, `INSERT INTO messages (id, created_at, client_id, direction, source, destination, body,
-			data_coding, connection_id, status)
-		VALUES ($1, now(), 0, 'mo', $2, $3, $4, $5, $6, 'delivered')`, id, sm.Source, sm.Destination, text, int16(sm.DataCoding), v.cfg.ID)
-	if err != nil {
-		v.e.log.Error("store MO failed", "err", err)
-	}
+	v.e.handleMO(ctx, v.cfg.ID, sm.Source, sm.Destination, text)
 }
 
 var finalStatus = map[string]string{
@@ -153,6 +147,11 @@ func (e *Engine) handleReceipt(ctx context.Context, c connConfig, r *smpp.Receip
 		return fmt.Errorf("unknown vendor message id")
 	}
 	status, final := finalStatus[r.Stat]
+	if final && status != "delivered" && failoverWanted(c.FailoverOnDLR, r.Stat, r.Err) {
+		if rerouted, err := e.rerouteAfterDLR(ctx, c, id, createdAt, r); err != nil || rerouted {
+			return err
+		}
+	}
 	if !final {
 		// ENROUTE / ACCEPTD: intermediate, just record it.
 		_, err := e.db.Exec(ctx, `UPDATE messages SET dlr_status = $3 WHERE id = $1 AND created_at = $2`, id, createdAt, r.Stat)
@@ -176,21 +175,23 @@ func (e *Engine) handleReceipt(ctx context.Context, c connConfig, r *smpp.Receip
 }
 
 type dlrMessage struct {
-	id         uuid.UUID
-	createdAt  time.Time
-	accountID  int64
-	kind       string
-	webhook    string
-	dlrFormat  string
-	source     string
-	dest       string
-	body       string
-	status     string
-	dlrStatus  string
-	dlrError   string
-	clientRef  string
-	parts      int
-	dlrAt      time.Time
+	id        uuid.UUID
+	createdAt time.Time
+	accountID int64
+	kind      string
+	webhook   string
+	moWebhook string
+	direction string
+	dlrFormat string
+	source    string
+	dest      string
+	body      string
+	status    string
+	dlrStatus string
+	dlrError  string
+	clientRef string
+	parts     int
+	dlrAt     time.Time
 }
 
 func (e *Engine) loadDLRMessage(ctx context.Context, id uuid.UUID, createdAt time.Time) (dlrMessage, error) {
@@ -198,10 +199,11 @@ func (e *Engine) loadDLRMessage(ctx context.Context, id uuid.UUID, createdAt tim
 	var parts int16
 	var dlrAt *time.Time
 	err := e.db.QueryRow(ctx, `SELECT m.id, m.created_at, COALESCE(m.account_id, 0), COALESCE(a.kind, ''), c.dlr_webhook_url,
-			c.dlr_format, m.source, m.destination, m.body, m.status, m.dlr_status, m.dlr_error, m.client_ref, m.parts, m.dlr_at
+			c.mo_webhook_url, m.direction, c.dlr_format, m.source, m.destination, m.body, m.status, m.dlr_status, m.dlr_error,
+			m.client_ref, m.parts, m.dlr_at
 		FROM messages m JOIN clients c ON c.id = m.client_id LEFT JOIN accounts a ON a.id = m.account_id
 		WHERE m.id = $1 AND m.created_at = $2`, id, createdAt).
-		Scan(&m.id, &m.createdAt, &m.accountID, &m.kind, &m.webhook, &m.dlrFormat, &m.source, &m.dest, &m.body, &m.status,
+		Scan(&m.id, &m.createdAt, &m.accountID, &m.kind, &m.webhook, &m.moWebhook, &m.direction, &m.dlrFormat, &m.source, &m.dest, &m.body, &m.status,
 			&m.dlrStatus, &m.dlrError, &m.clientRef, &parts, &dlrAt)
 	m.parts = int(parts)
 	if dlrAt != nil {
@@ -233,6 +235,9 @@ func (e *Engine) forwardDLR(ctx context.Context, id uuid.UUID, createdAt time.Ti
 var errNoReceiver = errors.New("client has no receiver bind")
 
 func (e *Engine) deliverDLR(ctx context.Context, m dlrMessage) error {
+	if m.direction == "mo" {
+		return e.deliverMO(ctx, m)
+	}
 	stat := m.dlrStatus
 	if stat == "" {
 		stat = "UNKNOWN"

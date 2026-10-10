@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Adnan-Dogar/telivoz-gateway/internal/auth"
+	"github.com/Adnan-Dogar/telivoz-gateway/internal/routing"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -18,14 +19,15 @@ import (
 const (
 	kText     = "text"
 	kInt      = "int"
-	kNum      = "num"  // NUMERIC, passed as a decimal string
+	kNum      = "num" // NUMERIC, passed as a decimal string
 	kBool     = "bool"
-	kRef      = "ref"  // nullable BIGINT foreign key (0 or null = NULL)
-	kISO      = "iso"  // nullable 2-letter country code, upper-cased
+	kRef      = "ref" // nullable BIGINT foreign key (0 or null = NULL)
+	kISO      = "iso" // nullable 2-letter country code, upper-cased
 	kTextArr  = "textarr"
 	kTime     = "time"
 	kPassword = "password" // stored as bcrypt hash in password_hash
 	kSecret   = "secret"   // stored encrypted in password_enc
+	kPhone    = "phone"    // digits only, international format
 )
 
 type field struct {
@@ -49,9 +51,9 @@ type resource struct {
 	afterWrite func(ctx context.Context, s *Server, id int64, in map[string]any, created bool) error
 }
 
-func staff(p *auth.Principal) bool    { return !p.IsClient() }
-func managers(p *auth.Principal) bool { return p.CanManage() }
-func anyone(p *auth.Principal) bool   { return true }
+func staff(p *auth.Principal) bool     { return !p.IsClient() }
+func managers(p *auth.Principal) bool  { return p.CanManage() }
+func anyone(p *auth.Principal) bool    { return true }
 func adminOnly(p *auth.Principal) bool { return p.IsAdmin() }
 
 func clientScope(col string) func(sc scope) (string, []any) {
@@ -77,7 +79,8 @@ var resources = []*resource{
 		path: "clients", table: "clients",
 		fields: []field{{"name", kText, true}, {"email", kText, false}, {"phone", kText, false}, {"country_iso", kISO, false},
 			{"currency", kText, false}, {"billing_type", kText, false}, {"credit_limit", kNum, false}, {"owner_id", kRef, false},
-			{"parent_id", kRef, false}, {"dlr_webhook_url", kText, false}, {"dlr_format", kText, false}, {"status", kText, false}},
+			{"parent_id", kRef, false}, {"dlr_webhook_url", kText, false}, {"dlr_format", kText, false},
+			{"mo_webhook_url", kText, false}, {"status", kText, false}},
 		search:    []string{"name", "email"},
 		extraCols: `, (SELECT balance FROM balances b WHERE b.client_id = t.id) AS balance, (SELECT name FROM users u WHERE u.id = t.owner_id) AS owner_name`,
 		canRead:   anyone, canWrite: managers, scopeSQL: clientScope("id"),
@@ -108,7 +111,7 @@ var resources = []*resource{
 			{"system_id", kText, true}, {"password", kSecret, false}, {"system_type", kText, false}, {"bind_mode", kText, false},
 			{"binds", kInt, false}, {"tps", kInt, false}, {"window_size", kInt, false}, {"source_ton", kInt, false},
 			{"source_npi", kInt, false}, {"dest_ton", kInt, false}, {"dest_npi", kInt, false}, {"dlr_id_format", kText, false},
-			{"max_attempts", kInt, false}, {"status", kText, false}},
+			{"max_attempts", kInt, false}, {"failover_on_dlr", kTextArr, false}, {"status", kText, false}},
 		search: []string{"name", "host", "system_id"}, hidden: []string{"password_enc"},
 		extraCols: `, (SELECT name FROM vendors v WHERE v.id = t.vendor_id) AS vendor_name`,
 		canRead:   staff, canWrite: managers, scopeSQL: vendorScope("vendor_id"), reloads: true,
@@ -185,14 +188,42 @@ var resources = []*resource{
 		path: "users", table: "users",
 		fields: []field{{"email", kText, true}, {"name", kText, false}, {"password", kPassword, false}, {"role", kText, true},
 			{"manager_id", kRef, false}, {"client_id", kRef, false}, {"status", kText, false}},
-		search: []string{"email", "name"}, hidden: []string{"password_hash"},
+		search: []string{"email", "name"}, hidden: []string{"password_hash", "totp_secret_enc"},
 		extraCols: `, (SELECT name FROM users m WHERE m.id = t.manager_id) AS manager_name, (SELECT name FROM clients c WHERE c.id = t.client_id) AS client_name`,
 		canRead:   staff, canWrite: adminOnly,
+		scopeSQL: func(sc scope) (string, []any) {
+			if sc.allUsers {
+				return "true", nil
+			}
+			return "t.id = ANY($1)", []any{sc.userIDs}
+		},
+	},
+	{
+		path: "blacklist", table: "blacklist",
+		fields:    []field{{"client_id", kRef, false}, {"number", kPhone, true}, {"reason", kText, false}},
+		search:    []string{"number", "reason"},
+		extraCols: `, (SELECT name FROM clients c WHERE c.id = t.client_id) AS client_name`,
+		canRead:   anyone, canWrite: anyone, reloads: true,
+		scopeSQL: func(sc scope) (string, []any) {
+			if sc.allClients {
+				return "true", nil
+			}
+			return "t.client_id = ANY($1)", []any{sc.clientIDs}
+		},
+	},
+	{
+		path: "mo-routes", table: "mo_routes",
+		fields: []field{{"name", kText, true}, {"priority", kInt, false}, {"number_prefix", kPhone, false}, {"keyword", kText, false},
+			{"client_id", kRef, true}, {"account_id", kRef, false}, {"auto_opt_out", kBool, false}, {"status", kText, false}},
+		search: []string{"name", "number_prefix", "keyword"},
+		extraCols: `, (SELECT name FROM clients c WHERE c.id = t.client_id) AS client_name,
+			(SELECT username FROM accounts a WHERE a.id = t.account_id) AS account_name`,
+		canRead: staff, canWrite: managers, scopeSQL: clientScope("client_id"), reloads: true,
 	},
 	{
 		path: "networks", table: "networks",
-		fields: []field{{"country_iso", kISO, true}, {"mcc", kText, true}, {"mnc", kText, true}, {"name", kText, false}},
-		search: []string{"name", "mcc", "country_iso"},
+		fields:    []field{{"country_iso", kISO, true}, {"mcc", kText, true}, {"mnc", kText, true}, {"name", kText, false}},
+		search:    []string{"name", "mcc", "country_iso"},
 		extraCols: `, (SELECT count(*) FROM number_prefixes p WHERE p.network_id = t.id) AS prefixes`,
 		canRead:   staff, canWrite: adminOnly, reloads: true,
 	},
@@ -225,6 +256,8 @@ func (s *Server) convert(f field, v any) (string, any, error) {
 	switch f.kind {
 	case kText:
 		return f.name, strings.TrimSpace(fmt.Sprint(v)), nil
+	case kPhone:
+		return f.name, routing.NormalizeNumber(fmt.Sprint(v)), nil
 	case kInt:
 		return f.name, toInt(v), nil
 	case kNum:
@@ -435,6 +468,13 @@ func (s *Server) crudCreate(res *resource) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "invalid", "invalid JSON")
 			return
 		}
+		if res.table == "blacklist" && principal(r).IsClient() {
+			in["client_id"] = principal(r).ClientID
+		}
+		if res.table == "blacklist" && !principal(r).IsAdmin() && toInt(in["client_id"]) == 0 {
+			writeError(w, http.StatusForbidden, "forbidden", "only administrators can add numbers to the global blacklist")
+			return
+		}
 		if err := s.checkRefs(r, in); err != nil {
 			writeError(w, http.StatusForbidden, "forbidden", err.Error())
 			return
@@ -531,6 +571,9 @@ func (s *Server) crudUpdate(res *resource) http.HandlerFunc {
 		if err := readJSON(r, &in); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid", "invalid JSON")
 			return
+		}
+		if res.table == "blacklist" && !principal(r).IsAdmin() {
+			delete(in, "client_id") // only admins move entries between clients or to the global list
 		}
 		if err := s.checkRefs(r, in); err != nil {
 			writeError(w, http.StatusForbidden, "forbidden", err.Error())

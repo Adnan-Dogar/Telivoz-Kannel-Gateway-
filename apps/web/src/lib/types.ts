@@ -7,6 +7,7 @@ export interface Me {
   role: Role;
   client_id: number | null;
   client_name: string | null;
+  totp_enabled?: boolean;
 }
 
 export interface Totals {
