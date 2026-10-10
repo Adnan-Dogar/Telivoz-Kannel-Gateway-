@@ -126,11 +126,13 @@ func (e *Engine) handleReceipt(ctx context.Context, c connConfig, r *smpp.Receip
 	}
 	// A vendor can send the DLR before we have finished recording its submit_sm_resp (fast failures do this
 	// routinely), so keep looking for a few seconds before giving up.
-	found := false
-	for try := 0; try < 25 && !found; try++ {
+	status, final := finalStatus[r.Stat]
+	found, staleTries := false, 0
+	for try := 0; try < 25; try++ {
 		if try > 0 {
 			time.Sleep(200 * time.Millisecond)
 		}
+		found = false
 		for _, vid := range candidates {
 			err := e.db.QueryRow(ctx, `SELECT message_id, created_at FROM vendor_message_ids WHERE connection_id = $1 AND vendor_id = $2`,
 				c.ID, vid).Scan(&id, &createdAt)
@@ -142,11 +144,25 @@ func (e *Engine) handleReceipt(ctx context.Context, c connConfig, r *smpp.Receip
 				return err
 			}
 		}
+		if !found {
+			continue
+		}
+		// A final DLR for a message that already has one usually means the vendor reused the ID and the new
+		// message's mapping is about to be recorded: look again for up to a second. (A genuine duplicate DLR
+		// then falls through and is handled harmlessly: the client is not notified twice.)
+		var done bool
+		if final && staleTries < 5 {
+			if err := e.db.QueryRow(ctx, `SELECT dlr_at IS NOT NULL FROM messages WHERE id = $1 AND created_at = $2`,
+				id, createdAt).Scan(&done); err == nil && done {
+				staleTries++
+				continue
+			}
+		}
+		break
 	}
 	if !found {
 		return fmt.Errorf("unknown vendor message id")
 	}
-	status, final := finalStatus[r.Stat]
 	if final && status != "delivered" && failoverWanted(c.FailoverOnDLR, r.Stat, r.Err) {
 		if rerouted, err := e.rerouteAfterDLR(ctx, c, id, createdAt, r); err != nil || rerouted {
 			return err

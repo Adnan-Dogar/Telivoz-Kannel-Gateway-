@@ -80,6 +80,9 @@ func (v *Vendor) Close() {
 }
 
 // CountFor returns how many submit_sm the vendor received for a destination.
+// ResetIDs restarts the vendor's message ID counter, as an SMSC does after a restart.
+func (v *Vendor) ResetIDs() { v.nextID.Store(1000) }
+
 func (v *Vendor) CountFor(dest string) int {
 	v.mu.Lock()
 	defer v.mu.Unlock()

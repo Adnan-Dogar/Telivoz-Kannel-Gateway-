@@ -10,7 +10,15 @@ func m(s string) Micros { v, _ := ParseMicros(s); return v }
 // fixture: Pakistan with two networks; three vendor connections with different costs.
 func fixture(t *testing.T, routes ...Route) *Snapshot {
 	t.Helper()
+	return fixtureWithQuality(t, nil, routes...)
+}
+
+func fixtureWithQuality(t *testing.T, quality []Quality, routes ...Route) *Snapshot {
+	t.Helper()
 	b := NewBuilder()
+	for _, q := range quality {
+		b.Quality(q)
+	}
 	b.Network(Network{ID: 1, CountryISO: "PK", MCC: "410", MNC: "01", Name: "Jazz"})
 	b.Network(Network{ID: 2, CountryISO: "PK", MCC: "410", MNC: "06", Name: "Telenor"})
 	b.Prefix("92300", 1)
@@ -197,5 +205,50 @@ func TestMatchMO(t *testing.T) {
 	}
 	if FirstWord("  Stop. ") != "STOP" {
 		t.Fatal("first word")
+	}
+}
+
+func TestQualityScore(t *testing.T) {
+	if got := QualityScore(5, 10, 0); got != neutralScore {
+		t.Fatalf("too few samples: %v", got)
+	}
+	if got := QualityScore(90, 100, 0); got != 90 {
+		t.Fatalf("90%% delivered: %v", got)
+	}
+	if got := QualityScore(90, 100, 30_000); got != 85 { // 30 s average DLR time costs 5 points
+		t.Fatalf("slow DLRs: %v", got)
+	}
+	if got := QualityScore(100, 100, 600_000); got != 90 { // the latency penalty is capped at 10
+		t.Fatalf("penalty cap: %v", got)
+	}
+}
+
+func TestQualityAndBalancedPolicies(t *testing.T) {
+	// Connection 10 (0.0090) delivers 95%, 20 (0.0050) 93%, 30 (no affordable rate, loss allowed) 99%.
+	q := []Quality{
+		{ConnectionID: 10, CountryISO: "PK", Delivered: 950, Final: 1000},
+		{ConnectionID: 20, CountryISO: "PK", Delivered: 930, Final: 1000},
+		{ConnectionID: 30, CountryISO: "PK", Delivered: 990, Final: 1000},
+	}
+	req := func(s *Snapshot) Request {
+		return Request{ClientID: 7, Dest: s.Lookup("923001234567"), Price: m("0.01")}
+	}
+
+	s := fixtureWithQuality(t, q, Route{ID: 1, Name: "q", CountryISO: "PK", Policy: "quality", AllowLoss: true, Targets: targets(20, 10, 30)})
+	if p, err := s.Select(req(s)); err != nil || p.Connections[0] != 30 || p.Connections[1] != 10 || p.Connections[2] != 20 {
+		t.Fatalf("quality: %v %v", p.Connections, err)
+	}
+
+	// Balanced: 10 and 20 are within 5 points of the best (99)? 95 yes, 93 no. So 10 is cheapest among
+	// 30 and 10 (30 costs more), then 30, then 20.
+	s = fixtureWithQuality(t, q, Route{ID: 1, Name: "b", CountryISO: "PK", Policy: "balanced", AllowLoss: true, Targets: targets(20, 10, 30)})
+	if p, err := s.Select(req(s)); err != nil || p.Connections[0] != 10 || p.Connections[1] != 30 || p.Connections[2] != 20 {
+		t.Fatalf("balanced: %v %v", p.Connections, err)
+	}
+
+	// A connection with too little traffic gets a neutral score and still appears.
+	s = fixtureWithQuality(t, q[:1], Route{ID: 1, Name: "q", CountryISO: "PK", Policy: "quality", Targets: targets(20, 10)})
+	if p, err := s.Select(req(s)); err != nil || p.Connections[0] != 10 || len(p.Connections) != 2 {
+		t.Fatalf("new vendor: %v %v", p.Connections, err)
 	}
 }

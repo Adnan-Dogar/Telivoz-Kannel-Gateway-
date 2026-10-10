@@ -221,6 +221,13 @@ var resources = []*resource{
 		canRead: staff, canWrite: managers, scopeSQL: clientScope("client_id"), reloads: true,
 	},
 	{
+		path: "branding", table: "branding",
+		fields: []field{{"domain", kText, false}, {"name", kText, true}, {"tagline", kText, false}, {"logo", kText, false},
+			{"primary_color", kText, false}, {"support_email", kText, false}},
+		search:  []string{"domain", "name"},
+		canRead: adminOnly, canWrite: adminOnly,
+	},
+	{
 		path: "networks", table: "networks",
 		fields:    []field{{"country_iso", kISO, true}, {"mcc", kText, true}, {"mnc", kText, true}, {"name", kText, false}},
 		search:    []string{"name", "mcc", "country_iso"},

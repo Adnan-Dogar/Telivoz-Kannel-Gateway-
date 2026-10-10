@@ -167,7 +167,34 @@ Messages already accepted by the new gateway stay in its database (searchable, b
 - **Excel**: rate imports, bulk campaign uploads and blacklist imports accept `.xlsx` as well as CSV. Reports and
   message/DLR searches download as Excel or CSV (up to 100,000 messages per download).
 - **API docs**: clients find the HTTP API, webhook formats and SMPP details under *API docs* in the portal.
+- **Route policies**: *Best quality* sends to the vendor with the best delivery rate for the country over the last
+  24 hours, and *Balanced* uses the cheapest vendor within 5 quality points of the best. *Vendor quality* shows the scores.
+- **Branding**: *Branding* (admins) sets the portal name, logo and colour, per reseller domain if needed.
 - **Statements**: *Statements* shows each client's monthly usage, payments and balances. Use *Print / PDF* to send it.
 - **Mobile app**: staff and clients sign in with the portal address and their usual login. See `apps/mobile/README.md` for store builds.
 - **Docker image**: the final image downloads nothing at build time (it uses the Alpine CA bundle and embedded
   time zones), and runs as a non-root user. Set `TZ` if logs should use local time.
+
+## 10. Second server (high availability)
+
+The gateway supports one **active** server and any number of **hot standbys**. Every instance takes a lock in
+PostgreSQL at start. Only the lock holder binds to vendors, accepts SMPP and serves the portal. The others wait,
+and the first one to get the lock takes over within about 3 seconds when the active server stops, crashes or loses
+its database connection. Two gateways can never be active at once, so there are no double binds or double sends.
+
+Setup:
+
+1. **Database:** run PostgreSQL on server A, with streaming replication to server B (`pg_basebackup -R`). Point
+   both gateways at the primary, either through a floating address or with a list (`host=a,b target_session_attrs=read-write`).
+2. **Gateway:** install it on both servers with the same `/etc/telivoz/gateway.env`, including the same
+   `GATEWAY_SECRET`, and enable the service on both.
+   The second one logs `standby: another gateway is active` and waits.
+3. **Client address:** give clients one floating IP (keepalived/VRRP) whose health check is
+   `curl -fs http://127.0.0.1:8080/healthz`. Only the active gateway answers, so the IP always follows it.
+   SMPP clients reconnect to the same address after a takeover, and messages already accepted are safe in the
+   database. Delivery reports for offline clients wait in the outbox until they bind again.
+4. **Database failover:** if server A itself is lost, promote the replica on B (`SELECT pg_promote();`, or use
+   Patroni for automatic promotion). The gateway on B then takes over.
+
+Test it once before going live: stop the service on the active server and watch the standby's log and the
+floating IP move.

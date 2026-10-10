@@ -25,14 +25,15 @@ A modern A2P SMS gateway replacing the old Kannel + PHP/Yii + Java system.
 
 New features:
 
-- Routing and delivery: sender-ID routing, LCR and weighted routes, failover on reject and on negative DLRs, content rules, bulk campaigns.
+- Routing and delivery: sender-ID routing, LCR, weighted and **quality-based** routes (vendor quality scores), failover on reject and on negative DLRs, content rules, bulk campaigns.
 - Clients: HTTP API v1 with API keys.
   - **Blacklists** (global or per client, CSV import; STOP replies are added automatically).
   - **Incoming SMS (MO)** forwarded to clients over SMPP or webhook.
   - **Monthly statements** (print or save as PDF), and an **API docs** page in the portal.
   - **Excel**: rate import, bulk upload and blacklist import accept `.xlsx`; reports and message/DLR searches export to Excel or CSV.
 - Insight: Alaris-style analytics with team hierarchy, live traffic monitor, route tester, Grafana dashboard.
-- Security and operations: audit log, **two-factor sign-in (TOTP)**, dark mode.
+- Security and operations: audit log, **two-factor sign-in (TOTP)**, dark mode, **white-label branding** per reseller domain,
+  and a **hot standby** second server with automatic takeover.
 - **Mobile app**: dashboard, live traffic, vendor connections and message search.
 
 ## Quick start (development)

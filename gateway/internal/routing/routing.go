@@ -6,6 +6,7 @@ package routing
 import (
 	"errors"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"regexp"
 	"sort"
@@ -87,7 +88,7 @@ type Route struct {
 	NetworkID     int64
 	SenderMatch   string // any, exact, prefix, regex
 	SenderPattern string
-	Policy        string // priority, weighted, lcr
+	Policy        string // priority, weighted, lcr, quality, balanced
 	AllowLoss     bool
 	Targets       []Target
 	senderRe      *regexp.Regexp
@@ -130,6 +131,39 @@ type Snapshot struct {
 	rules        []*ContentRule
 	blacklist    map[int64]map[string]struct{} // client id (0 = everyone) -> numbers
 	moRoutes     []*MORoute
+	quality      map[qualityKey]Quality
+}
+
+type qualityKey struct {
+	connectionID int64
+	country      string
+}
+
+// Quality is a connection's recent delivery performance for one country.
+type Quality struct {
+	ConnectionID int64
+	CountryISO   string
+	Delivered    int64
+	Final        int64 // delivered + undelivered
+	AvgDLRMs     int64
+	Score        float64 // 0-100
+}
+
+// MinQualitySamples is how many final DLRs a connection needs in a country before its score is trusted.
+const MinQualitySamples = 50
+
+// neutralScore is used for connections without enough recent traffic, so new vendors still get tried.
+const neutralScore = 50
+
+// QualityScore turns delivery rate and DLR latency into 0-100: the delivery rate in percent, minus up to
+// 10 points for slow delivery reports (one point per 6 seconds of average latency).
+func QualityScore(delivered, final, avgDLRMs int64) float64 {
+	if final < MinQualitySamples {
+		return neutralScore
+	}
+	rate := float64(delivered) / float64(final) * 100
+	penalty := min(float64(avgDLRMs)/6000, 10)
+	return max(rate-penalty, 0)
 }
 
 // MORoute sends incoming messages for a number (and optional keyword) to a client.
@@ -151,7 +185,7 @@ func NewBuilder() *Builder {
 	return &Builder{s: &Snapshot{
 		prefixes: map[string]int64{}, networks: map[int64]Network{}, dialCodes: map[string]string{},
 		clientRates: map[rateKey]Micros{}, vendorRates: map[rateKey]Micros{}, connections: map[int64]Connection{},
-		blacklist: map[int64]map[string]struct{}{},
+		blacklist: map[int64]map[string]struct{}{}, quality: map[qualityKey]Quality{},
 	}}
 }
 
@@ -184,6 +218,20 @@ func (b *Builder) VendorRate(connectionID int64, country string, networkID int64
 }
 
 func (b *Builder) Connection(c Connection) { b.s.connections[c.ID] = c }
+
+// Quality records a connection's recent results for a country; the score is computed here.
+func (b *Builder) Quality(q Quality) {
+	q.Score = QualityScore(q.Delivered, q.Final, q.AvgDLRMs)
+	b.s.quality[qualityKey{q.ConnectionID, q.CountryISO}] = q
+}
+
+// QualityFor returns the connection's score for a country (neutral when there is too little traffic).
+func (s *Snapshot) QualityFor(connectionID int64, country string) float64 {
+	if q, ok := s.quality[qualityKey{connectionID, country}]; ok {
+		return q.Score
+	}
+	return neutralScore
+}
 
 // Blacklist blocks a number for one client (clientID 0 = for every client).
 func (b *Builder) Blacklist(clientID int64, number string) {
@@ -409,6 +457,10 @@ type Plan struct {
 
 var ErrNoRoute = errors.New("no route for destination")
 
+// BalancedTolerance is how many quality points below the best a connection may score and still compete on
+// price under the "balanced" policy.
+const BalancedTolerance = 5.0
+
 // Select picks the first matching route and orders its usable connections by the route's policy.
 // Connections that are disabled, or that would cost more than the client pays (unless the route allows a
 // loss), are left out. LCR only uses connections that have a rate for the destination.
@@ -423,6 +475,7 @@ func (s *Snapshot) Select(req Request) (Plan, error) {
 			known  bool
 			pos    int
 			weight int
+			score  float64
 		}
 		var cands []cand
 		for _, t := range r.Targets {
@@ -437,16 +490,51 @@ func (s *Snapshot) Select(req Request) (Plan, error) {
 			if r.Policy == "lcr" && !known {
 				continue
 			}
-			cands = append(cands, cand{t.ConnectionID, cost, known, t.Position, t.Weight})
+			cands = append(cands, cand{t.ConnectionID, cost, known, t.Position, t.Weight, s.QualityFor(t.ConnectionID, req.Dest.CountryISO)})
 		}
 		if len(cands) == 0 {
 			continue // try the next matching route
+		}
+		if r.Policy == "quality" || r.Policy == "balanced" {
+			for i := range cands {
+				if !cands[i].known {
+					cands[i].cost = math.MaxInt64 // no rate: never counts as the cheapest
+				}
+			}
 		}
 		switch r.Policy {
 		case "lcr":
 			sort.SliceStable(cands, func(i, j int) bool {
 				if cands[i].cost != cands[j].cost {
 					return cands[i].cost < cands[j].cost
+				}
+				return cands[i].pos < cands[j].pos
+			})
+		case "quality":
+			// Best recent delivery first; equal scores go to the cheaper connection.
+			sort.SliceStable(cands, func(i, j int) bool {
+				if cands[i].score != cands[j].score {
+					return cands[i].score > cands[j].score
+				}
+				return cands[i].cost < cands[j].cost
+			})
+		case "balanced":
+			// Cheapest among the connections within BalancedTolerance points of the best score, then the rest
+			// by score: saves cost without sending traffic to a clearly worse route.
+			best := 0.0
+			for _, c := range cands {
+				best = max(best, c.score)
+			}
+			good := func(c cand) bool { return c.score >= best-BalancedTolerance }
+			sort.SliceStable(cands, func(i, j int) bool {
+				gi, gj := good(cands[i]), good(cands[j])
+				switch {
+				case gi != gj:
+					return gi
+				case gi && cands[i].cost != cands[j].cost:
+					return cands[i].cost < cands[j].cost
+				case !gi && cands[i].score != cands[j].score:
+					return cands[i].score > cands[j].score
 				}
 				return cands[i].pos < cands[j].pos
 			})

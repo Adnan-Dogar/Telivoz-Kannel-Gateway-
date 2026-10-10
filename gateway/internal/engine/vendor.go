@@ -514,8 +514,12 @@ func (v *vendorConn) finishSent(m queuedMessage, vendorIDs []string, note string
 	cost := v.cost(m)
 	err := pgx.BeginFunc(context.Background(), v.e.db, func(tx pgx.Tx) error {
 		for _, vid := range vendorIDs {
+			// Vendors reuse IDs (counters reset after a restart or wrap around): the newest message owns the ID,
+			// otherwise its DLR would be matched to an old, already finished message and lost.
 			if _, err := tx.Exec(context.Background(), `INSERT INTO vendor_message_ids (connection_id, vendor_id, message_id, created_at)
-				VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`, v.cfg.ID, vid, m.id, m.createdAt); err != nil {
+				VALUES ($1, $2, $3, $4)
+				ON CONFLICT (connection_id, vendor_id) DO UPDATE SET message_id = EXCLUDED.message_id, created_at = EXCLUDED.created_at
+				WHERE vendor_message_ids.created_at <= EXCLUDED.created_at`, v.cfg.ID, vid, m.id, m.createdAt); err != nil {
 				return err
 			}
 		}

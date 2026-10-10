@@ -28,7 +28,7 @@ export type Option = { value: string; label: string };
 export interface FieldDef {
   name: string;
   label: string;
-  type?: "text" | "number" | "decimal" | "password" | "select" | "textarea" | "switch" | "tags" | "date";
+  type?: "text" | "number" | "decimal" | "password" | "select" | "textarea" | "switch" | "tags" | "date" | "color" | "image";
   options?: Option[] | ((l: Lookups, values: Row) => Option[]);
   required?: boolean;
   hint?: string;
@@ -98,6 +98,36 @@ export function FieldInput({ f, values, set, lookups }: { f: FieldDef; values: R
       return <Input type="password" autoComplete="new-password" value={v ?? ""} placeholder={f.placeholder} onChange={(e) => onChange(e.target.value)} />;
     case "date":
       return <Input type="datetime-local" value={v ?? ""} onChange={(e) => onChange(e.target.value)} />;
+    case "color":
+      return (
+        <div className="flex items-center gap-2">
+          <input type="color" className="h-9 w-12 cursor-pointer rounded-md border bg-transparent" value={v || "#4f46e5"} onChange={(e) => onChange(e.target.value)} />
+          <Input value={v ?? ""} placeholder="#4f46e5" onChange={(e) => onChange(e.target.value)} />
+        </div>
+      );
+    case "image":
+      return (
+        <div className="flex items-center gap-3">
+          {v ? <img src={String(v)} alt="" className="size-12 rounded-md border object-contain" /> : <div className="size-12 rounded-md border border-dashed" />}
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/svg+xml"
+            className="text-xs"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              if (file.size > 280_000) {
+                toast.error("Image too large: use one under 280 KB");
+                return;
+              }
+              const reader = new FileReader();
+              reader.onload = () => onChange(String(reader.result));
+              reader.readAsDataURL(file);
+            }}
+          />
+          {v ? <Button type="button" variant="ghost" size="sm" onClick={() => onChange("")}>Remove</Button> : null}
+        </div>
+      );
     default:
       return <Input value={v ?? ""} placeholder={f.placeholder} required={f.required} onChange={(e) => onChange(e.target.value)} />;
   }

@@ -76,6 +76,7 @@ func (s *Server) Handler() http.Handler {
 	// Portal API.
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/auth/login", s.login)
+		r.Get("/public/branding", s.branding)
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireSession, s.csrf)
 			r.Post("/auth/logout", s.logout)
@@ -91,6 +92,7 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/stats/live", s.statsLive)
 			r.Get("/stats/overview", s.statsOverview)
 			r.Get("/stats/breakdown", s.statsBreakdown)
+			r.Get("/stats/vendor-quality", s.vendorQuality)
 
 			r.Get("/messages", s.listMessages)
 			r.Get("/messages/{id}", s.getMessage)
