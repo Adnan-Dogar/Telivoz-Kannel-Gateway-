@@ -282,6 +282,25 @@ func (e *Engine) loadSnapshot(ctx context.Context) (*routing.Snapshot, error) {
 		return nil, err
 	}
 
+	// Delivery quality per connection and country over the last 24 hours (refreshed with every reload).
+	rows, err = e.db.Query(ctx, `SELECT connection_id, country_iso, sum(delivered), sum(delivered + undelivered),
+			COALESCE(sum(dlr_latency_ms_sum) / NULLIF(sum(dlr_latency_count), 0), 0)::bigint
+		FROM stats_hourly WHERE hour >= now() - interval '24 hours' AND connection_id <> 0 AND country_iso <> ''
+		GROUP BY 1, 2`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var q routing.Quality
+		if err := rows.Scan(&q.ConnectionID, &q.CountryISO, &q.Delivered, &q.Final, &q.AvgDLRMs); err != nil {
+			return nil, err
+		}
+		b.Quality(q)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
 	rows, err = e.db.Query(ctx, `SELECT id, name, priority, number_prefix, keyword, client_id, COALESCE(account_id, 0), auto_opt_out
 		FROM mo_routes WHERE status = 'active'`)
 	if err != nil {

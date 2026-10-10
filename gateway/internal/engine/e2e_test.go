@@ -236,6 +236,24 @@ func TestHexVendorIDsStillMatchDLR(t *testing.T) {
 	waitFor(t, "DLR matched across hex/decimal ids", 5*time.Second, func() bool { return c.DLRFor(id) == "DELIVRD" })
 }
 
+// A vendor that restarts reuses message IDs; the DLR must go to the newest message with that ID, not to the
+// old one that used it before.
+func TestReusedVendorIDsMatchTheNewestMessage(t *testing.T) {
+	pool := tu.DB(t)
+	f := tu.Seed(t, pool)
+	v := &sim.Vendor{Mode: sim.VendorOK}
+	c1 := tu.Connection(t, pool, f.VendorID, "v", vendor(t, v), "0.002")
+	tu.Route(t, pool, "priority", c1)
+	h := start(t, pool, f, "")
+	waitBound(t, h.eng, c1)
+	c := h.client()
+	first, _ := c.Send(context.Background(), "Acme", "923005555551", "before the vendor restart")
+	waitFor(t, "first DLR", 5*time.Second, func() bool { return c.DLRFor(first) == "DELIVRD" })
+	v.ResetIDs()
+	second, _ := c.Send(context.Background(), "Acme", "923005555552", "after the vendor restart")
+	waitFor(t, "DLR for the message that reused the vendor ID", 5*time.Second, func() bool { return c.DLRFor(second) == "DELIVRD" })
+}
+
 func TestRejections(t *testing.T) {
 	pool := tu.DB(t)
 	f := tu.Seed(t, pool)

@@ -7,6 +7,7 @@ import { MeProvider, useSession } from "@/lib/session";
 import { LoginPage } from "@/pages/login";
 import { Spinner } from "@/components/ui/misc";
 import { router } from "@/router";
+import { BrandingEffect } from "@/lib/branding";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -33,6 +34,7 @@ function App() {
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
+      <BrandingEffect />
       <App />
       <Toaster richColors position="top-right" closeButton />
     </QueryClientProvider>

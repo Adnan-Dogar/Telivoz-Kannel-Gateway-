@@ -4,10 +4,12 @@ import { BarChart3, MessageSquareText, Route, ShieldCheck } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { Me } from "@/lib/types";
 import { Button } from "@/components/ui/button";
+import { useBranding } from "@/lib/branding";
 import { Field, Input } from "@/components/ui/input";
 
 export function LoginPage() {
   const qc = useQueryClient();
+  const brand = useBranding();
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [code, setCode] = React.useState("");
@@ -36,14 +38,18 @@ export function LoginPage() {
 
   return (
     <div className="grid min-h-full lg:grid-cols-2">
-      <div className="relative hidden overflow-hidden bg-gradient-to-br from-[oklch(0.35_0.2_277)] via-[oklch(0.42_0.22_285)] to-[oklch(0.5_0.2_300)] p-12 text-white lg:flex lg:flex-col">
+      <div className="relative hidden overflow-hidden bg-gradient-to-br from-[color-mix(in_oklch,var(--primary)_70%,black)] via-[color-mix(in_oklch,var(--primary)_85%,black)] to-[color-mix(in_oklch,var(--primary)_80%,white)] p-12 text-white lg:flex lg:flex-col">
         <div className="absolute -right-24 -top-24 size-96 rounded-full bg-white/10 blur-3xl" />
         <div className="absolute -bottom-32 left-10 size-96 rounded-full bg-fuchsia-400/20 blur-3xl" />
         <div className="relative flex items-center gap-3">
-          <div className="grid size-10 place-items-center rounded-xl bg-white/15 backdrop-blur">
-            <MessageSquareText className="size-5" />
-          </div>
-          <span className="text-lg font-semibold">Telivoz Gateway</span>
+          {brand.logo ? (
+            <img src={brand.logo} alt="" className="size-10 rounded-xl bg-white object-contain p-1" />
+          ) : (
+            <div className="grid size-10 place-items-center rounded-xl bg-white/15 backdrop-blur">
+              <MessageSquareText className="size-5" />
+            </div>
+          )}
+          <span className="text-lg font-semibold">{brand.name}</span>
         </div>
         <div className="relative mt-auto max-w-md">
           <h2 className="text-4xl font-semibold leading-tight tracking-tight">Every message routed, billed and tracked in real time.</h2>
@@ -67,7 +73,7 @@ export function LoginPage() {
         <form onSubmit={submit} className="w-full max-w-sm space-y-6">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
-            <p className="mt-1 text-sm text-muted-foreground">Use your Telivoz portal account.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Use your {brand.name} portal account.</p>
           </div>
           <div className="space-y-4">
             <Field label="Email">

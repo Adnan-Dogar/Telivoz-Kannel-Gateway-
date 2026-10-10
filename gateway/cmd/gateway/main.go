@@ -96,6 +96,15 @@ func run(cmd string, args []string, log *slog.Logger) error {
 		return fmt.Errorf("unknown command %q", cmd)
 	}
 
+	// One active gateway per database; a second server waits here as a hot standby.
+	lock, err := db.AcquireActive(ctx, cfg.DatabaseURL, log)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	lockLost := make(chan error, 1)
+	go lock.Watch(ctx, lockLost)
+
 	eng := engine.New(pool, cipher, log)
 	if err := eng.Start(ctx); err != nil {
 		return err
@@ -121,6 +130,8 @@ func run(cmd string, args []string, log *slog.Logger) error {
 		return fmt.Errorf("smpp server: %w", err)
 	case err := <-httpErr:
 		return fmt.Errorf("http server: %w", err)
+	case err := <-lockLost:
+		return err // exit so systemd restarts us as a standby; never run two active gateways
 	}
 	sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

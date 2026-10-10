@@ -523,3 +523,84 @@ func TestExcelRateImportAndExports(t *testing.T) {
 		t.Fatalf("report xlsx: %d %v %q", code, err, rows)
 	}
 }
+
+func TestVendorQuality(t *testing.T) {
+	e := setup(t)
+	conn := tu.Connection(t, e.pool, e.f.VendorID, "q1", "127.0.0.1:1", "0.004")
+	// 200 final DLRs, 180 delivered, 12 s average DLR time: score 90 - 2 = 88.
+	tu.Exec(t, e.pool, `INSERT INTO stats_hourly (hour, client_id, connection_id, country_iso, sent, delivered, undelivered, cost,
+			dlr_latency_ms_sum, dlr_latency_count)
+		VALUES (date_trunc('hour', now()) - interval '2 hours', $1, $2, 'PK', 200, 180, 20, 0.8, 2400000, 200)`, e.f.ClientID, conn)
+	a := e.browser()
+	a.login("admin@test", "admin123")
+	code, out, raw := a.do("GET", "/api/stats/vendor-quality", nil, false)
+	rows, _ := out["rows"].([]any)
+	if code != 200 || len(rows) != 1 {
+		t.Fatalf("vendor quality: %d %s", code, raw)
+	}
+	r := rows[0].(map[string]any)
+	if r["score"] != float64(88) || r["trusted"] != true || r["dlr_rate"] != 0.9 || r["avg_cost"] != 0.004 {
+		t.Fatalf("row: %v", r)
+	}
+	e.user("cust@test", "client", 0, e.f.ClientID)
+	c := e.browser()
+	c.login("cust@test", "password1")
+	if code, _, _ := c.do("GET", "/api/stats/vendor-quality", nil, false); code != http.StatusForbidden {
+		t.Fatalf("client sees vendor quality: %d", code)
+	}
+	// The new route policies are accepted.
+	if code, _, raw := a.do("POST", "/api/routes", map[string]any{"name": "best", "policy": "balanced", "country_iso": "PK"}, true); code != 201 {
+		t.Fatalf("balanced route: %d %s", code, raw)
+	}
+}
+
+func TestBrandingPerDomain(t *testing.T) {
+	e := setup(t)
+	get := func(host string) map[string]any {
+		req, _ := http.NewRequest("GET", e.srv.URL+"/api/public/branding", nil)
+		req.Host = host
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return out
+	}
+	if b := get("portal.example.com"); b["name"] != "Telivoz" {
+		t.Fatalf("built-in default: %v", b)
+	}
+	a := e.browser()
+	a.login("admin@test", "admin123")
+	for _, in := range []map[string]any{
+		{"domain": "", "name": "Telivoz Cloud", "primary_color": "#4F46E5"},
+		{"domain": "sms.reseller.pk", "name": "Reseller SMS", "primary_color": "#0EA5E9", "logo": "data:image/png;base64,iVBORw0KGgo="},
+	} {
+		if code, _, raw := a.do("POST", "/api/branding", in, true); code != 201 {
+			t.Fatalf("create branding: %d %s", code, raw)
+		}
+	}
+	if b := get("sms.reseller.pk:443"); b["name"] != "Reseller SMS" || b["primary_color"] != "#0EA5E9" {
+		t.Fatalf("reseller domain: %v", b)
+	}
+	if b := get("other.example.com"); b["name"] != "Telivoz Cloud" {
+		t.Fatalf("default row: %v", b)
+	}
+	// Scripts or remote URLs are refused as logos, and colours must be hex.
+	for _, bad := range []map[string]any{
+		{"domain": "x.pk", "name": "X", "logo": "javascript:alert(1)"},
+		{"domain": "y.pk", "name": "Y", "primary_color": "red; background:url(x)"},
+	} {
+		if code, _, _ := a.do("POST", "/api/branding", bad, true); code != http.StatusBadRequest {
+			t.Fatalf("bad branding accepted: %v → %d", bad, code)
+		}
+	}
+	// Only admins manage branding.
+	e.user("m@test", "manager", 0, 0)
+	m := e.browser()
+	m.login("m@test", "password1")
+	if code, _, _ := m.do("POST", "/api/branding", map[string]any{"domain": "z.pk", "name": "Z"}, true); code != http.StatusForbidden {
+		t.Fatalf("manager wrote branding: %d", code)
+	}
+}

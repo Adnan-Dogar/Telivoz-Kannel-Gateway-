@@ -5,9 +5,10 @@ import { Command } from "cmdk";
 import {
   Activity, BarChart3, Building2, Cable, ChevronsLeft, ChevronsRight, CreditCard, FileClock, FlaskConical, KeyRound,
   LayoutDashboard, LogOut, Menu as MenuIcon, MessageSquareText, Moon, Route as RouteIcon, Search, Send, Settings, Sun, Tags,
-  Truck, Users, Wand2, Ban, Inbox, ReceiptText, BookOpen,
+  Truck, Users, Wand2, Ban, Inbox, ReceiptText, BookOpen, Gauge, Palette,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { BrandMark, useBranding } from "@/lib/branding";
 import { useMe, useTheme } from "@/lib/session";
 import type { Me } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -45,6 +46,7 @@ export const nav: { group: string; items: NavItem[] }[] = [
     items: [
       { to: "/vendors", label: "Vendors", icon: Truck, show: staff },
       { to: "/connections", label: "Connections", icon: Cable, show: staff },
+      { to: "/vendor-quality", label: "Vendor quality", icon: Gauge, show: staff },
       { to: "/rates", label: "Rates", icon: Tags },
       { to: "/routes", label: "Routes", icon: RouteIcon, show: staff },
       { to: "/content-rules", label: "Content rules", icon: Wand2, show: staff },
@@ -57,6 +59,7 @@ export const nav: { group: string; items: NavItem[] }[] = [
     items: [
       { to: "/users", label: "Users & team", icon: Users, show: staff },
       { to: "/audit", label: "Audit log", icon: FileClock, show: (me) => me.role === "admin" },
+      { to: "/branding", label: "Branding", icon: Palette, show: (me) => me.role === "admin" },
       { to: "/settings", label: "Settings", icon: Settings },
     ],
   },
@@ -102,15 +105,14 @@ function Sidebar({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: (
 }
 
 function Brand({ collapsed }: { collapsed: boolean }) {
+  const brand = useBranding();
   return (
     <div className={cn("flex h-14 items-center gap-2.5 border-b px-4", collapsed && "justify-center px-0")}>
-      <div className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground shadow-sm">
-        <MessageSquareText className="size-4" />
-      </div>
+      <BrandMark className="size-8 shrink-0 rounded-lg shadow-sm" iconClassName="size-4" />
       {!collapsed && (
-        <div className="leading-tight">
-          <p className="font-semibold">Telivoz</p>
-          <p className="text-[11px] text-muted-foreground">SMS Gateway</p>
+        <div className="min-w-0 leading-tight">
+          <p className="truncate font-semibold">{brand.name}</p>
+          {brand.tagline && <p className="truncate text-[11px] text-muted-foreground">{brand.tagline}</p>}
         </div>
       )}
     </div>

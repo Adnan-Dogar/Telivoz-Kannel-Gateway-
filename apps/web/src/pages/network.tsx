@@ -216,6 +216,8 @@ function TargetsEditor({ values, set }: { values: Row; set: (v: Row) => void }) 
         {policy === "priority" && "Tried in this order; the next one is used when a vendor rejects the message."}
         {policy === "weighted" && "Traffic is split by weight; the others remain as failover."}
         {policy === "lcr" && "Cheapest vendor rate first (connections without a rate for the destination are skipped)."}
+        {policy === "quality" && "Best delivery rate in the last 24 hours first (see Vendor quality); the others remain as failover."}
+        {policy === "balanced" && "Cheapest of the vendors within 5 points of the best quality score; clearly worse vendors only as failover."}
       </p>
       <div className="space-y-2">
         {targets.map((t, i) => (
@@ -264,7 +266,7 @@ export function RoutesPage() {
             </div>
           ),
         },
-        { key: "policy", header: "Policy", render: (r) => <Badge tone="primary">{r.policy === "lcr" ? "LCR" : r.policy}</Badge> },
+        { key: "policy", header: "Policy", render: (r) => <Badge tone="primary">{r.policy === "lcr" ? "LCR" : String(r.policy)}</Badge> },
         { key: "targets", header: "Vendors", render: (r) => <span className="text-sm">{(r.targets ?? []).map((t: Row) => t.name).join(" → ") || <span className="text-danger">none</span>}</span> },
         { key: "status", header: "Status", render: (r) => <StatusBadge status={r.status} /> },
       ]}
@@ -279,7 +281,7 @@ export function RoutesPage() {
         { name: "account_id", label: "Only for account", type: "select", span: 1, options: (l, v) => l.accounts.filter((a) => !v.client_id || String(a.client_id) === String(v.client_id)).map((a) => ({ value: String(a.id), label: a.username })) },
         { name: "sender_match", label: "Sender ID rule", type: "select", default: "any", span: 1, options: [{ value: "any", label: "Any sender" }, { value: "exact", label: "Equals" }, { value: "prefix", label: "Starts with" }, { value: "regex", label: "Regular expression" }] },
         { name: "sender_pattern", label: "Sender ID", span: 1, showWhen: (v) => v.sender_match && v.sender_match !== "any" },
-        { name: "policy", label: "Policy", type: "select", required: true, default: "priority", span: 1, options: [{ value: "priority", label: "Priority / failover" }, { value: "weighted", label: "Weighted split" }, { value: "lcr", label: "Least cost (LCR)" }] },
+        { name: "policy", label: "Policy", type: "select", required: true, default: "priority", span: 1, options: [{ value: "priority", label: "Priority / failover" }, { value: "weighted", label: "Weighted split" }, { value: "lcr", label: "Least cost (LCR)" }, { value: "quality", label: "Best quality" }, { value: "balanced", label: "Balanced (quality + cost)" }] },
         { name: "allow_loss", label: "Allow vendors costing more than the client price", type: "switch", span: 1 },
         { name: "status", label: "Status", type: "select", required: true, default: "active", options: active },
       ]}
