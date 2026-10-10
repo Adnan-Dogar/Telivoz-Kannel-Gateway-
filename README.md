@@ -29,8 +29,9 @@ New features:
 - Clients: HTTP API v1 with API keys.
   - **Blacklists** (global or per client, CSV import; STOP replies are added automatically).
   - **Incoming SMS (MO)** forwarded to clients over SMPP or webhook.
-  - **Monthly statements** (print or save as PDF).
-- Insight: Alaris-style analytics with team hierarchy, live traffic monitor, route tester.
+  - **Monthly statements** (print or save as PDF), and an **API docs** page in the portal.
+  - **Excel**: rate import, bulk upload and blacklist import accept `.xlsx`; reports and message/DLR searches export to Excel or CSV.
+- Insight: Alaris-style analytics with team hierarchy, live traffic monitor, route tester, Grafana dashboard.
 - Security and operations: audit log, **two-factor sign-in (TOTP)**, dark mode.
 - **Mobile app**: dashboard, live traffic, vendor connections and message search.
 

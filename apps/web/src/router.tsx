@@ -8,6 +8,7 @@ import { SendPage } from "@/pages/send";
 import { AccountsPage, BillingPage, ClientsPage } from "@/pages/customers";
 import { ConnectionsPage, ContentRulesPage, RatesPage, RouteTestPage, RoutesPage, VendorsPage } from "@/pages/network";
 import { AuditPage, SettingsPage, UsersPage } from "@/pages/admin";
+import { ApiDocsPage } from "@/pages/docs";
 import { BlacklistPage, MORoutesPage, StatementPage } from "@/pages/phase2";
 import { Empty } from "@/components/ui/misc";
 
@@ -39,6 +40,7 @@ const routes = [
   page("/users", UsersPage),
   page("/audit", AuditPage),
   page("/settings", SettingsPage),
+  page("/api-docs", ApiDocsPage),
 ];
 
 export const router = createRouter({ routeTree: root.addChildren(routes), defaultPreload: "intent" });

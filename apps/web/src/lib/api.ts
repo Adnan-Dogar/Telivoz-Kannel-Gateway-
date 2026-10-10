@@ -16,7 +16,7 @@ async function request<T>(method: string, path: string, body?: unknown, raw = fa
   const init: RequestInit = { method, credentials: "same-origin", headers: {} as Record<string, string> };
   const headers = init.headers as Record<string, string>;
   if (method !== "GET") headers["X-Requested-With"] = "telivoz";
-  if (body instanceof FormData) {
+  if (body instanceof FormData || body instanceof Blob) {
     init.body = body;
   } else if (body !== undefined) {
     headers["Content-Type"] = "application/json";
@@ -45,6 +45,8 @@ export const api = {
   get: <T>(path: string) => request<T>("GET", path),
   post: <T>(path: string, body?: unknown) => request<T>("POST", path, body ?? {}),
   postText: <T>(path: string, text: string) => request<T>("POST", path, text),
+  /** Sends a file as the raw request body (CSV or Excel). */
+  postFile: <T>(path: string, file: Blob) => request<T>("POST", path, file),
   patch: <T>(path: string, body: unknown) => request<T>("PATCH", path, body),
   del: <T>(path: string) => request<T>("DELETE", path),
   upload: <T>(path: string, form: FormData) => request<T>("POST", path, form),

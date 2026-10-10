@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { Dialog } from "@/components/ui/sheet";
 import { Empty, Skeleton } from "@/components/ui/misc";
+import { pickSheet, SHEET_TYPES } from "@/lib/sheet";
 import { TBody, TD, TH, THead, TR, Table } from "@/components/ui/table";
 
 function ImportBlacklist() {
@@ -23,13 +24,18 @@ function ImportBlacklist() {
   const [open, setOpen] = React.useState(false);
   const [client, setClient] = React.useState(me.client_id ? String(me.client_id) : "");
   const [text, setText] = React.useState("");
+  const [file, setFile] = React.useState<File | null>(null);
   const [reason, setReason] = React.useState("");
   const run = useMutation({
-    mutationFn: () => api.postText<{ added: number; valid: number }>(`/api/blacklist/import${qs({ client_id: client, reason })}`, text),
+    mutationFn: () => {
+      const path = `/api/blacklist/import${qs({ client_id: client, reason })}`;
+      return file ? api.postFile<{ added: number; valid: number }>(path, file) : api.postText<{ added: number; valid: number }>(path, text);
+    },
     onSuccess: (r) => {
       toast.success(`${num(r.added)} numbers added (${num(r.valid - r.added)} already listed)`);
       setOpen(false);
       setText("");
+      setFile(null);
       qc.invalidateQueries({ queryKey: ["blacklist"] });
     },
     onError: (e: Error) => toast.error(e.message),
@@ -37,8 +43,8 @@ function ImportBlacklist() {
   return (
     <>
       <Button variant="outline" size="sm" onClick={() => setOpen(true)}><Upload /> Import list</Button>
-      <Dialog open={open} onOpenChange={setOpen} title="Import numbers" description="One number per line, or separated by commas. Invalid and duplicate numbers are skipped."
-        footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={() => run.mutate()} disabled={!text || run.isPending}>Import</Button></>}>
+      <Dialog open={open} onOpenChange={setOpen} title="Import numbers" description="One number per line, separated by commas, or an Excel file. Invalid and duplicate numbers are skipped."
+        footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={() => run.mutate()} disabled={(!text && !file) || run.isPending}>Import</Button></>}>
         <div className="grid gap-4">
           {can.staff(me) && (
             <Field label="For client" hint={me.role === "admin" ? "Leave empty to block for every client" : undefined}>
@@ -50,8 +56,15 @@ function ImportBlacklist() {
           )}
           <Field label="Reason"><Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Customer request, DNC list…" /></Field>
           <Field label="Numbers">
-            <Textarea rows={8} className="font-mono text-xs" value={text} onChange={(e) => setText(e.target.value)} placeholder={"923001234567\n923451234567"} />
-            <input type="file" accept=".csv,.txt,text/csv,text/plain" className="text-xs" onChange={async (e) => { const f = e.target.files?.[0]; if (f) setText(await f.text()); }} />
+            {file ? (
+              <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                <span className="truncate">{file.name}</span>
+                <Button variant="ghost" size="sm" onClick={() => setFile(null)}>Remove</Button>
+              </div>
+            ) : (
+              <Textarea rows={8} className="font-mono text-xs" value={text} onChange={(e) => setText(e.target.value)} placeholder={"923001234567\n923451234567"} />
+            )}
+            <input type="file" accept={SHEET_TYPES} className="text-xs" onChange={(e) => pickSheet(e.target.files?.[0], setText, setFile)} />
           </Field>
         </div>
       </Dialog>

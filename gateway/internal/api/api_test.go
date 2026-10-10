@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"github.com/Adnan-Dogar/telivoz-gateway/internal/api"
 	"github.com/Adnan-Dogar/telivoz-gateway/internal/auth"
 	"github.com/Adnan-Dogar/telivoz-gateway/internal/engine"
+	"github.com/Adnan-Dogar/telivoz-gateway/internal/sheet"
 	"github.com/Adnan-Dogar/telivoz-gateway/internal/sim"
 	tu "github.com/Adnan-Dogar/telivoz-gateway/internal/testutil"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -448,5 +450,76 @@ func TestMobileBearerToken(t *testing.T) {
 	_, out, _ = e.browser().do("POST", "/api/auth/login", map[string]any{"email": "admin@test", "password": "admin123"}, true)
 	if _, ok := out["token"]; ok {
 		t.Fatal("cookie login returned the token")
+	}
+}
+
+// raw sends a non-JSON body (or none) and returns the status and raw response.
+func (c *client) raw(method, path string, body []byte) (int, []byte, http.Header) {
+	req, _ := http.NewRequest(method, c.e.srv.URL+path, bytes.NewReader(body))
+	req.Header.Set("X-Requested-With", "telivoz")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		c.e.t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, out, resp.Header
+}
+
+func TestExcelRateImportAndExports(t *testing.T) {
+	e := setup(t)
+	a := e.browser()
+	a.login("admin@test", "admin123")
+
+	// Rates from an Excel file, as saved by Excel: numeric MNC without its leading zero, date as a serial number.
+	tu.Exec(t, e.pool, `INSERT INTO networks (mcc, mnc, name, country_iso) VALUES ('410', '07', 'Test Net', 'PK') ON CONFLICT DO NOTHING`)
+	var xlsx bytes.Buffer
+	if err := sheet.WriteXLSX(&xlsx, "rates", [][]string{
+		{"country_iso", "mcc", "mnc", "price", "effective_from"},
+		{"PK", "", "", "0.0123", ""},
+		{"PK", "410", "7", "0.0150", "46000"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := a.raw("POST", "/api/rates/import?target=client&id="+itoa(e.f.ClientID), xlsx.Bytes())
+	if code != 200 || !strings.Contains(string(out), `"imported":2`) {
+		t.Fatalf("xlsx import: %d %s", code, out)
+	}
+	var eff time.Time
+	if err := e.pool.QueryRow(context.Background(), `SELECT effective_from FROM client_rates r JOIN networks n ON n.id = r.network_id
+		WHERE r.client_id = $1 AND n.mnc = '07'`, e.f.ClientID).Scan(&eff); err != nil || eff.Format("2006-01-02") != "2025-12-09" {
+		t.Fatalf("network rate effective_from %v %v", eff, err)
+	}
+
+	// Message export: staff see vendor cost, clients do not (in the export or the JSON list).
+	tu.Exec(t, e.pool, `INSERT INTO messages (id, created_at, client_id, destination, body, country_iso, price, cost, status, dlr_status)
+		VALUES (gen_random_uuid(), now(), $1, '923001234567', 'hello, "world"', 'PK', 0.0123, 0.004, 'delivered', 'DELIVRD')`, e.f.ClientID)
+	code, out, h := a.raw("GET", "/api/messages?format=csv", nil)
+	if code != 200 || !strings.Contains(h.Get("Content-Disposition"), ".csv") ||
+		!strings.Contains(string(out), "vendor_connection,cost") || !strings.Contains(string(out), `"hello, ""world"""`) {
+		t.Fatalf("staff csv: %d %s", code, out)
+	}
+	code, out, _ = a.raw("GET", "/api/messages?format=xlsx", nil)
+	rows, err := sheet.ReadXLSX(out)
+	if code != 200 || err != nil || len(rows) != 2 || rows[1][5] != "923001234567" || rows[1][12] != "DELIVRD" {
+		t.Fatalf("staff xlsx: %d %v %q", code, err, rows)
+	}
+
+	e.user("cust@test", "client", 0, e.f.ClientID)
+	c := e.browser()
+	c.login("cust@test", "password1")
+	code, out, _ = c.raw("GET", "/api/messages?format=csv", nil)
+	if code != 200 || strings.Contains(string(out), "cost") || strings.Contains(string(out), "vendor") {
+		t.Fatalf("client csv shows vendor data: %d %s", code, out)
+	}
+	_, _, list := c.do("GET", "/api/messages", nil, false)
+	if strings.Contains(list, `"cost"`) || strings.Contains(list, "connection_name") || !strings.Contains(list, "923001234567") {
+		t.Fatalf("client list shows vendor data: %s", list)
+	}
+
+	// Report download as Excel.
+	code, out, _ = a.raw("GET", "/api/stats/breakdown?dim=country&format=xlsx", nil)
+	if rows, err := sheet.ReadXLSX(out); code != 200 || err != nil || rows[0][0] != "country" {
+		t.Fatalf("report xlsx: %d %v %q", code, err, rows)
 	}
 }

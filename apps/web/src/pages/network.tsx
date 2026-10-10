@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { Dialog } from "@/components/ui/sheet";
 import { Empty, Tabs } from "@/components/ui/misc";
+import { pickSheet, SHEET_TYPES } from "@/lib/sheet";
 
 const active = [{ value: "active", label: "Active" }, { value: "disabled", label: "Disabled" }];
 
@@ -109,24 +110,26 @@ function ImportRates({ target, onDone }: { target: "client" | "connection"; onDo
   const [open, setOpen] = React.useState(false);
   const [owner, setOwner] = React.useState("");
   const [csv, setCsv] = React.useState("");
+  const [file, setFile] = React.useState<File | null>(null);
   const owners = target === "client" ? (l?.clients ?? []).map((c) => ({ id: c.id, name: c.name })) : (l?.connections ?? []).map((c) => ({ id: c.id, name: c.name }));
   const run = useMutation({
-    mutationFn: () => api.postText<{ imported: number; skipped: string[] }>(`/api/rates/import?target=${target}&id=${owner}`, csv),
+    mutationFn: () => (file ? api.postFile<{ imported: number; skipped: string[] }>(`/api/rates/import?target=${target}&id=${owner}`, file) : api.postText<{ imported: number; skipped: string[] }>(`/api/rates/import?target=${target}&id=${owner}`, csv)),
     onSuccess: (r) => {
       toast.success(`${r.imported} rates imported${r.skipped.length ? `, ${r.skipped.length} skipped` : ""}`);
       if (r.skipped.length) toast.warning(r.skipped.slice(0, 5).join("\n"));
       setOpen(false);
       setCsv("");
+      setFile(null);
       onDone();
     },
     onError: (e: Error) => toast.error(e.message),
   });
   return (
     <>
-      <Button variant="outline" size="sm" onClick={() => setOpen(true)}><Upload /> Import CSV</Button>
+      <Button variant="outline" size="sm" onClick={() => setOpen(true)}><Upload /> Import CSV / Excel</Button>
       <Dialog open={open} onOpenChange={setOpen} title={`Import ${target === "client" ? "client" : "vendor"} rates`}
         description="Columns: country_iso, mcc, mnc, price, effective_from (optional, YYYY-MM-DD). Leave mcc/mnc empty for a country-wide rate."
-        footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={() => run.mutate()} disabled={!owner || !csv || run.isPending}>Import</Button></>}>
+        footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button onClick={() => run.mutate()} disabled={!owner || (!csv && !file) || run.isPending}>Import</Button></>}>
         <div className="grid gap-4">
           <Field label={target === "client" ? "Client" : "Connection"}>
             <Select value={owner} onChange={(e) => setOwner(e.target.value)}>
@@ -134,9 +137,16 @@ function ImportRates({ target, onDone }: { target: "client" | "connection"; onDo
               {owners.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
             </Select>
           </Field>
-          <Field label="CSV">
-            <Textarea rows={8} className="font-mono text-xs" value={csv} onChange={(e) => setCsv(e.target.value)} placeholder={"PK,410,01,0.0085\nPK,,,0.0090,2026-11-01"} />
-            <input type="file" accept=".csv,text/csv" className="text-xs" onChange={async (e) => { const f = e.target.files?.[0]; if (f) setCsv(await f.text()); }} />
+          <Field label="CSV or Excel file">
+            {file ? (
+              <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                <span className="truncate">{file.name}</span>
+                <Button variant="ghost" size="sm" onClick={() => setFile(null)}>Remove</Button>
+              </div>
+            ) : (
+              <Textarea rows={8} className="font-mono text-xs" value={csv} onChange={(e) => setCsv(e.target.value)} placeholder={"PK,410,01,0.0085\nPK,,,0.0090,2026-11-01"} />
+            )}
+            <input type="file" accept={SHEET_TYPES} className="text-xs" onChange={(e) => pickSheet(e.target.files?.[0], setCsv, setFile)} />
           </Field>
         </div>
       </Dialog>

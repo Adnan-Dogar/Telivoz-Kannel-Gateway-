@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/csv"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -96,7 +95,7 @@ var breakdownDims = map[string]struct{ key, label string }{
 }
 
 // statsBreakdown groups the period by a dimension: client, connection, vendor, country, network or owner
-// (account manager). ?format=csv downloads it.
+// (account manager). ?format=csv or ?format=xlsx downloads it.
 func (s *Server) statsBreakdown(w http.ResponseWriter, r *http.Request) {
 	dimName := r.URL.Query().Get("dim")
 	dim, ok := breakdownDims[dimName]
@@ -166,18 +165,15 @@ func (s *Server) statsBreakdown(w http.ResponseWriter, r *http.Request) {
 		s.dbError(w, err)
 		return
 	}
-	if r.URL.Query().Get("format") == "csv" {
-		w.Header().Set("Content-Type", "text/csv")
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="report-%s-%s.csv"`, dimName, from.Format("20060102")))
-		cw := csv.NewWriter(w)
-		_ = cw.Write([]string{dimName, "submitted", "sent", "delivered", "undelivered", "failed", "delivery_rate", "revenue", "cost", "margin", "avg_dlr_ms"})
+	if wantsFile(r) {
+		rows := [][]string{{dimName, "submitted", "sent", "delivered", "undelivered", "failed", "delivery_rate", "revenue", "cost", "margin", "avg_dlr_ms"}}
 		for _, x := range out {
-			_ = cw.Write([]string{x.Label, strconv.FormatInt(x.Submitted, 10), strconv.FormatInt(x.Sent, 10),
+			rows = append(rows, []string{x.Label, strconv.FormatInt(x.Submitted, 10), strconv.FormatInt(x.Sent, 10),
 				strconv.FormatInt(x.Delivered, 10), strconv.FormatInt(x.Undelivered, 10), strconv.FormatInt(x.Failed, 10),
 				strconv.FormatFloat(x.DLRRate*100, 'f', 1, 64) + "%", strconv.FormatFloat(x.Revenue, 'f', 4, 64),
 				strconv.FormatFloat(x.Cost, 'f', 4, 64), strconv.FormatFloat(x.Margin, 'f', 4, 64), strconv.FormatInt(x.AvgDLRMs, 10)})
 		}
-		cw.Flush()
+		writeTable(w, r, fmt.Sprintf("report-%s-%s", dimName, from.Format("20060102")), rows)
 		return
 	}
 	if out == nil {

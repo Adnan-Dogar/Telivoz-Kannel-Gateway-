@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +14,7 @@ import (
 	"github.com/Adnan-Dogar/telivoz-gateway/internal/engine"
 	"github.com/Adnan-Dogar/telivoz-gateway/internal/gsm"
 	"github.com/Adnan-Dogar/telivoz-gateway/internal/routing"
+	"github.com/Adnan-Dogar/telivoz-gateway/internal/sheet"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -77,14 +77,72 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
+	if wantsFile(r) {
+		s.exportMessages(w, r, cond, args, from)
+		return
+	}
 	var raw []byte
-	err := s.db.QueryRow(r.Context(), fmt.Sprintf(`SELECT COALESCE(jsonb_agg(to_jsonb(x) ORDER BY x.created_at DESC), '[]')
-		FROM (SELECT %s FROM messages m WHERE %s ORDER BY m.created_at DESC LIMIT %d) x`, messageCols, cond, limit), args...).Scan(&raw)
+	err := s.db.QueryRow(r.Context(), fmt.Sprintf(`SELECT COALESCE(jsonb_agg(to_jsonb(x) - %s ORDER BY x.created_at DESC), '[]')
+		FROM (SELECT %s FROM messages m WHERE %s ORDER BY m.created_at DESC LIMIT %d) x`, hiddenFields(r), messageCols, cond, limit), args...).Scan(&raw)
 	if err != nil {
 		s.dbError(w, err)
 		return
 	}
 	writeRaw(w, http.StatusOK, raw)
+}
+
+// hiddenFields lists message fields client logins must not see: vendor cost and routing internals.
+func hiddenFields(r *http.Request) string {
+	if principal(r).IsClient() {
+		return `'{cost,connection_id,connection_name,route_id,route_name,attempts}'::text[]`
+	}
+	return `'{}'::text[]`
+}
+
+const maxExportRows = 100_000
+
+// exportMessages downloads the filtered messages with their DLRs as CSV or Excel (newest first, at most
+// maxExportRows). Client logins get no vendor or cost columns.
+func (s *Server) exportMessages(w http.ResponseWriter, r *http.Request, cond string, args []any, from time.Time) {
+	staff := !principal(r).IsClient()
+	cols := `m.id::text, to_char(m.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'), COALESCE(cl.name, ''), m.direction,
+		m.source, m.destination, m.body, m.parts::text, COALESCE(m.country_iso, ''), COALESCE(n.name, ''), m.status,
+		m.price::text, m.dlr_status, m.dlr_error, COALESCE(to_char(m.dlr_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'), ''),
+		m.error, m.client_ref`
+	header := []string{"id", "created_utc", "client", "direction", "from", "to", "text", "parts", "country", "network", "status",
+		"price", "dlr_status", "dlr_error", "dlr_utc", "error", "client_ref"}
+	if staff {
+		cols += `, COALESCE(cn.name, ''), m.cost::text`
+		header = append(header, "vendor_connection", "cost")
+	}
+	rows, err := s.db.Query(r.Context(), fmt.Sprintf(`SELECT %s FROM messages m
+		LEFT JOIN clients cl ON cl.id = m.client_id LEFT JOIN networks n ON n.id = m.network_id
+		LEFT JOIN connections cn ON cn.id = m.connection_id
+		WHERE %s ORDER BY m.created_at DESC LIMIT %d`, cols, cond, maxExportRows), args...)
+	if err != nil {
+		s.dbError(w, err)
+		return
+	}
+	defer rows.Close()
+	out := [][]string{header}
+	for rows.Next() {
+		rec := make([]string, len(header))
+		ptrs := make([]any, len(rec))
+		for i := range rec {
+			ptrs[i] = &rec[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			s.dbError(w, err)
+			return
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		s.dbError(w, err)
+		return
+	}
+	s.audit(r, "export", "messages", "", map[string]int{"rows": len(out) - 1})
+	writeTable(w, r, "messages-"+from.Format("20060102"), out)
 }
 
 func (s *Server) getMessage(w http.ResponseWriter, r *http.Request) {
@@ -97,10 +155,10 @@ func (s *Server) getMessage(w http.ResponseWriter, r *http.Request) {
 	var sc string
 	sc, args = s.messageScope(r, args)
 	var raw []byte
-	err = s.db.QueryRow(r.Context(), fmt.Sprintf(`SELECT to_jsonb(x) || jsonb_build_object(
+	err = s.db.QueryRow(r.Context(), fmt.Sprintf(`SELECT (to_jsonb(x) || jsonb_build_object(
 			'ledger', (SELECT COALESCE(jsonb_agg(to_jsonb(l) ORDER BY l.id), '[]') FROM ledger l WHERE l.message_id = x.id),
-			'route_name', (SELECT name FROM routes r WHERE r.id = x.route_id))
-		FROM (SELECT %s FROM messages m WHERE m.id = $1 AND %s) x`, messageCols, sc), args...).Scan(&raw)
+			'route_name', (SELECT name FROM routes r WHERE r.id = x.route_id))) - %s
+		FROM (SELECT %s FROM messages m WHERE m.id = $1 AND %s) x`, hiddenFields(r), messageCols, sc), args...).Scan(&raw)
 	if err != nil {
 		s.dbError(w, err)
 		return
@@ -372,7 +430,7 @@ func (s *Server) testRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// importRates loads a CSV of rates for one client or one connection.
+// importRates loads a CSV or Excel (.xlsx) file of rates for one client or one connection.
 // Columns: country_iso, mcc, mnc, price[, effective_from]. Empty mcc/mnc means the whole country.
 func (s *Server) importRates(w http.ResponseWriter, r *http.Request) {
 	if !principal(r).CanManage() {
@@ -393,26 +451,28 @@ func (s *Server) importRates(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden", "client not in your scope")
 		return
 	}
-	cr := csv.NewReader(http.MaxBytesReader(w, r.Body, 20<<20))
-	cr.FieldsPerRecord = -1
-	cr.TrimLeadingSpace = true
+	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 20<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid", "file too large (max 20 MB)")
+		return
+	}
+	records, err := sheet.Read(data)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid", "could not read the file: "+err.Error())
+		return
+	}
 	imported, skipped := 0, []string{}
-	err := pgx.BeginFunc(r.Context(), s.db, func(tx pgx.Tx) error {
-		line := 0
-		for {
-			rec, err := cr.Read()
-			if errors.Is(err, io.EOF) {
-				return nil
-			}
-			line++
-			if err != nil {
-				return fmt.Errorf("line %d: %w", line, err)
-			}
+	err = pgx.BeginFunc(r.Context(), s.db, func(tx pgx.Tx) error {
+		for i, rec := range records {
+			line := i + 1
 			if len(rec) < 4 || strings.EqualFold(strings.TrimSpace(rec[0]), "country_iso") {
 				continue
 			}
 			iso := strings.ToUpper(strings.TrimSpace(rec[0]))
 			mcc, mnc := strings.TrimSpace(rec[1]), strings.TrimSpace(rec[2])
+			if len(mnc) == 1 {
+				mnc = "0" + mnc // Excel drops the leading zero of numeric cells
+			}
 			price, perr := routing.ParseMicros(rec[3])
 			if len(iso) != 2 || perr != nil {
 				skipped = append(skipped, fmt.Sprintf("line %d: invalid country or price", line))
@@ -420,8 +480,11 @@ func (s *Server) importRates(w http.ResponseWriter, r *http.Request) {
 			}
 			eff := time.Now()
 			if len(rec) > 4 && strings.TrimSpace(rec[4]) != "" {
-				if t, err := time.Parse("2006-01-02", strings.TrimSpace(rec[4])); err == nil {
+				v := strings.TrimSpace(rec[4])
+				if t, err := time.Parse("2006-01-02", v); err == nil {
 					eff = t
+				} else if days, err := strconv.ParseFloat(v, 64); err == nil && days > 1 {
+					eff = time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC).AddDate(0, 0, int(days)) // Excel date serial
 				}
 			}
 			var networkID *int64
@@ -441,6 +504,7 @@ func (s *Server) importRates(w http.ResponseWriter, r *http.Request) {
 			}
 			imported++
 		}
+		return nil
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid", err.Error())
