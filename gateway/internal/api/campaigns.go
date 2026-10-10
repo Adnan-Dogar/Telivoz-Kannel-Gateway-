@@ -15,6 +15,7 @@ import (
 
 	"github.com/Adnan-Dogar/telivoz-gateway/internal/engine"
 	"github.com/Adnan-Dogar/telivoz-gateway/internal/routing"
+	"github.com/Adnan-Dogar/telivoz-gateway/internal/sheet"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -23,7 +24,7 @@ func jsonEncode(w io.Writer, v any) error { return json.NewEncoder(w).Encode(v) 
 const maxCampaignNumbers = 2_000_000
 
 // createCampaign accepts a multipart upload: fields account_id, name, sender, text and a file with numbers
-// (CSV/TXT; the first column holding digits is used). The file is streamed, never loaded whole into memory;
+// (CSV/TXT or Excel .xlsx; the first column holding digits is used). The file is streamed, never loaded whole into memory;
 // numbers are normalized, de-duplicated and stored, then sent in the background at the account's TPS.
 func (s *Server) createCampaign(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 200<<20)
@@ -49,10 +50,9 @@ func (s *Server) createCampaign(w http.ResponseWriter, r *http.Request) {
 			fields[part.FormName()] = string(b)
 			continue
 		}
-		sc := bufio.NewScanner(part)
-		sc.Buffer(make([]byte, 64<<10), 1<<20)
-		for sc.Scan() {
-			for _, cell := range strings.FieldsFunc(sc.Text(), func(r rune) bool { return r == ',' || r == ';' || r == '\t' }) {
+		// addRow keeps the first cell of a row that holds a valid number.
+		addRow := func(cells []string) {
+			for _, cell := range cells {
 				n := routing.NormalizeNumber(strings.Trim(cell, `" `))
 				if len(n) < 6 || len(n) > 15 {
 					continue
@@ -61,15 +61,41 @@ func (s *Server) createCampaign(w http.ResponseWriter, r *http.Request) {
 					seen[n] = struct{}{}
 					numbers = append(numbers, n)
 				}
-				break
-			}
-			if len(numbers) > maxCampaignNumbers {
-				writeError(w, http.StatusBadRequest, "too_many", fmt.Sprintf("at most %d numbers per campaign", maxCampaignNumbers))
 				return
 			}
 		}
-		if err := sc.Err(); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid", "could not read the file: "+err.Error())
+		br := bufio.NewReaderSize(part, 64<<10)
+		if head, _ := br.Peek(4); sheet.IsXLSX(head) {
+			// Excel files are zip archives and must be read whole (limit 50 MB, about 2 million rows).
+			data, err := io.ReadAll(io.LimitReader(br, 50<<20+1))
+			if err != nil || len(data) > 50<<20 {
+				writeError(w, http.StatusBadRequest, "invalid", "Excel file too large (max 50 MB); save it as CSV instead")
+				return
+			}
+			rows, err := sheet.ReadXLSX(data)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid", "could not read the file: "+err.Error())
+				return
+			}
+			for _, row := range rows {
+				addRow(row)
+			}
+		} else {
+			sc := bufio.NewScanner(br)
+			sc.Buffer(make([]byte, 64<<10), 1<<20)
+			for sc.Scan() {
+				addRow(strings.FieldsFunc(sc.Text(), func(r rune) bool { return r == ',' || r == ';' || r == '\t' }))
+				if len(numbers) > maxCampaignNumbers {
+					break
+				}
+			}
+			if err := sc.Err(); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid", "could not read the file: "+err.Error())
+				return
+			}
+		}
+		if len(numbers) > maxCampaignNumbers {
+			writeError(w, http.StatusBadRequest, "too_many", fmt.Sprintf("at most %d numbers per campaign", maxCampaignNumbers))
 			return
 		}
 	}

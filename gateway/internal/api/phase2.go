@@ -1,6 +1,7 @@
 package api
 
 import (
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/Adnan-Dogar/telivoz-gateway/internal/auth"
 	"github.com/Adnan-Dogar/telivoz-gateway/internal/routing"
+	"github.com/Adnan-Dogar/telivoz-gateway/internal/sheet"
 )
 
 // ---- two-factor login -----------------------------------------------------------------------------------
@@ -114,15 +116,22 @@ func (s *Server) importBlacklist(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden", "client not in your scope")
 		return
 	}
-	body := make([]byte, 0, 1<<16)
-	buf := make([]byte, 32<<10)
-	reader := http.MaxBytesReader(w, r.Body, 50<<20)
-	for {
-		n, err := reader.Read(buf)
-		body = append(body, buf[:n]...)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 50<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid", "file too large (max 50 MB)")
+		return
+	}
+	if sheet.IsXLSX(body) {
+		rows, err := sheet.ReadXLSX(body)
 		if err != nil {
-			break
+			writeError(w, http.StatusBadRequest, "invalid", "could not read the file: "+err.Error())
+			return
 		}
+		var b strings.Builder
+		for _, row := range rows {
+			b.WriteString(strings.Join(row, ",") + "\n")
+		}
+		body = []byte(b.String())
 	}
 	seen := map[string]bool{}
 	var numbers []string

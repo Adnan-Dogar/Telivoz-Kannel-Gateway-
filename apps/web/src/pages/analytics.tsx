@@ -55,8 +55,13 @@ export function AnalyticsPage() {
           <>
             <PeriodPicker value={period.key} onChange={setPeriod} />
             <Button variant="outline" asChild>
+              <a href={`/api/stats/breakdown${qs({ dim, from: period.from, to: period.to, format: "xlsx" })}`}>
+                <Download /> Excel
+              </a>
+            </Button>
+            <Button variant="outline" asChild>
               <a href={`/api/stats/breakdown${qs({ dim, from: period.from, to: period.to, format: "csv" })}`}>
-                <Download /> Export CSV
+                <Download /> CSV
               </a>
             </Button>
           </>

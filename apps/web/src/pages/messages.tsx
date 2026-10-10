@@ -1,13 +1,14 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSearch } from "@tanstack/react-router";
-import { CheckCircle2, Circle, CircleX, Search, Send, Server, Users } from "lucide-react";
+import { CheckCircle2, Circle, CircleX, Download, Search, Send, Server, Users } from "lucide-react";
 import { api, qs } from "@/lib/api";
 import { dateTime, duration, money, rate } from "@/lib/format";
 import { can, useMe } from "@/lib/session";
 import type { Message } from "@/lib/types";
 import { PageHeader } from "@/components/page";
 import { PeriodPicker, usePeriod } from "@/components/period";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/badge";
 import { Input, Select } from "@/components/ui/input";
@@ -126,7 +127,22 @@ export function MessagesPage() {
 
   return (
     <>
-      <PageHeader title="Messages" description="Search any message by number, sender, text or message ID" actions={<PeriodPicker value={period.key} onChange={setPeriod} />} />
+      <PageHeader
+        title="Messages"
+        description="Search any message by number, sender, text or message ID"
+        actions={
+          <>
+            <PeriodPicker value={period.key} onChange={setPeriod} />
+            {(["xlsx", "csv"] as const).map((format) => (
+              <Button key={format} variant="outline" asChild>
+                <a href={`/api/messages${qs({ q: term, status, direction, from: period.from, to: period.to, format })}`} title="Download messages with their DLRs (up to 100,000)">
+                  <Download /> {format === "xlsx" ? "Excel" : "CSV"}
+                </a>
+              </Button>
+            ))}
+          </>
+        }
+      />
       <Card>
         <div className="flex flex-wrap items-center gap-3 border-b p-3">
           <div className="relative min-w-64 flex-1">

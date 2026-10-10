@@ -11,6 +11,7 @@ import { StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Textarea } from "@/components/ui/input";
 import { Empty, Tabs } from "@/components/ui/misc";
+import { SHEET_TYPES } from "@/lib/sheet";
 import { TBody, TD, TH, THead, TR, Table } from "@/components/ui/table";
 
 // Mirrors the gateway's GSM-7 detection and part limits.
@@ -118,9 +119,9 @@ function Campaigns() {
         <Field label="Message"><Textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} required /><Counter text={text} /></Field>
         <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-6 text-center hover:bg-muted/50">
           <FileUp className="size-6 text-muted-foreground" />
-          <span className="text-sm font-medium">{file ? file.name : "Upload numbers (CSV or TXT)"}</span>
+          <span className="text-sm font-medium">{file ? file.name : "Upload numbers (CSV, TXT or Excel)"}</span>
           <span className="text-xs text-muted-foreground">One number per line or the first numeric column. Up to 2 million numbers; duplicates are removed.</span>
-          <input type="file" accept=".csv,.txt,text/csv,text/plain" className="hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          <input type="file" accept={SHEET_TYPES} className="hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
         </label>
         <Button type="submit" disabled={!file || create.isPending}>{create.isPending ? "Uploading…" : "Start campaign"}</Button>
       </form>

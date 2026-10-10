@@ -147,6 +147,7 @@ Messages already accepted by the new gateway stay in its database (searchable, b
 
 - **Logs**: `journalctl -u telivoz-gateway -f` (JSON lines; every message has its ID in the logs).
 - **Health**: `GET /healthz`. **Metrics**: `GET /metrics` (Prometheus); alert rules in `deploy/monitoring/alerts.yml`.
+  Grafana: *Dashboards → Import* `deploy/monitoring/grafana-dashboard.json` and pick the Prometheus data source.
 - **Backups**: `pg_dump -Fc gateway > gateway-$(date +%F).dump` daily, plus WAL archiving for point-in-time
   recovery. Test a restore once a month.
 - **Config changes** (routes, rates, vendors, accounts) apply immediately; no restart is ever needed.
@@ -163,6 +164,9 @@ Messages already accepted by the new gateway stay in its database (searchable, b
   or let the client bind SMPP as receiver/transceiver. STOP-type replies add the sender to that client's blacklist.
 - **DLR failover**: on each vendor connection, list the DLR results that should try the next vendor, for example
   `UNDELIV:011` or `REJECTD`. Only list codes that mean "this route cannot deliver", never generic failures.
+- **Excel**: rate imports, bulk campaign uploads and blacklist imports accept `.xlsx` as well as CSV. Reports and
+  message/DLR searches download as Excel or CSV (up to 100,000 messages per download).
+- **API docs**: clients find the HTTP API, webhook formats and SMPP details under *API docs* in the portal.
 - **Statements**: *Statements* shows each client's monthly usage, payments and balances. Use *Print / PDF* to send it.
 - **Mobile app**: staff and clients sign in with the portal address and their usual login. See `apps/mobile/README.md` for store builds.
 - **Docker image**: the final image downloads nothing at build time (it uses the Alpine CA bundle and embedded
